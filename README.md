@@ -50,10 +50,14 @@ Designed for simplicity, portability, and reproducibility — **no docking, no M
 
 ---
 
-### 🙏 Acknowledgement
+### 🙏 Acknowledgements
 
-This tool uses **[pKaPredict](https://github.com/anastasiafloris/pKaPredict)** as the machine-learning engine for pKa prediction.  
-Thank you to the authors and maintainers for providing this open-source pKa prediction package.
+This tool uses:
+
+- **[pKaPredict](https://github.com/anastasiafloris/pKaPredict)** — for machine-learning based pKa prediction.  
+- **[Machine-learning meets pKa (czodrowskilab)](https://github.com/czodrowskilab/Machine-learning-meets-pKa)** — for research and methodology inspirations in ML-based pKa estimation.  
+
+Thank you to the authors and maintainers of these open-source projects for providing valuable foundations for this tool.
 
 ---
 
