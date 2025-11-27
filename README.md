@@ -50,4 +50,11 @@ Designed for simplicity, portability, and reproducibility — **no docking, no M
 
 ---
 
+### 🙏 Acknowledgement
+
+This tool uses **[pKaPredict](https://github.com/anastasiafloris/pKaPredict)** as the machine-learning engine for pKa prediction.  
+Thank you to the authors and maintainers for providing this open-source pKa prediction package.
+
+---
+
 *This code is part of the DFDD project.*
