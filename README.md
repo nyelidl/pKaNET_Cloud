@@ -47,3 +47,7 @@ Designed for simplicity, portability, and reproducibility — **no docking, no M
 
 ## **A focused, clean tool:**
 **Just pKa prediction → protonation → 3D structure generation**, ready to run directly in the cloud. 🚀
+
+---
+
+*This code is part of the DFDD project.*
