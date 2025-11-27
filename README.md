@@ -7,6 +7,8 @@ Designed for simplicity, portability, and reproducibility — **no docking, no M
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/16oz3jR6gWOzaSaJImlVflPkgT8eTcfTi?usp=sharing)
 
+![pKaNET Workflow](https://github.com/nyelidl/pKaNET_Cloud/blob/main/Pka_WF.png)
+
 ---
 
 ## 🔍 **What This Tool Does**
