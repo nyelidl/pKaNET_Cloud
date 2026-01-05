@@ -198,7 +198,7 @@ if run_btn:
                 tmp = Path(tmpdir)
                 out_dir = tmp / "out"
 
-                            uploaded_bytes = uploaded.read() if uploaded else None
+            uploaded_bytes = uploaded.read() if uploaded else None
             uploaded_name = uploaded.name if uploaded else None
 
             out = run_job(
