@@ -140,6 +140,7 @@ with st.sidebar.expander("How to use (examples)", expanded=False):
 CCO ethanol
 CC(=O)O acetic_acid
 c1ccccc1 benzene
+)
 
 st.sidebar.markdown("---")
 st.sidebar.caption("Tip: MOL2 may fall back to SDF depending on server build.")
@@ -283,5 +284,5 @@ Proper citation helps us demonstrate impact and supports continued development
 and maintenance of this tool.
 
 ---
-
+)
 
