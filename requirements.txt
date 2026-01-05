@@ -1,9 +1,8 @@
 streamlit
-rdkit-pypi
-dimorphite-dl
-pkapredict
 numpy
 pandas
+rdkit
+dimorphite-dl
+pkapredict
 py3Dmol
 stmol
-
