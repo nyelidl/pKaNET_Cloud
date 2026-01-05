@@ -140,6 +140,12 @@ with st.sidebar.expander("How to use (examples)", expanded=False):
 CCO ethanol
 CC(=O)O acetic_acid
 c1ccccc1 benzene
+
+**3) Ligand file
+
+- Select `FILE` and upload .pdb, .sdf, or .mol2.
+
+"""
 )
 
 st.sidebar.markdown("---")
