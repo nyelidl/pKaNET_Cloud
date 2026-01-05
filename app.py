@@ -270,7 +270,7 @@ if run_btn:
                     mime="application/zip",
                 )
 
-except Exception as e:
-    st.error(f"Error: {e}")
+    except Exception as e:
+        st.error(f"Error: {e}")
 
 
