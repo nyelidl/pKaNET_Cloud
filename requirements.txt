@@ -1,0 +1,7 @@
+streamlit
+rdkit-pypi
+dimorphite-dl
+pkapredict
+numpy
+pandas
+
