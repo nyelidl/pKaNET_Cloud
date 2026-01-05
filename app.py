@@ -288,12 +288,12 @@ and maintenance of this tool.
 
 This tool builds upon several excellent open-source projects and research efforts:
 
-- **pKaPredict / pKaNET** — machine-learning–based pKa prediction framework  
-- **Machine Learning Meets pKa (czodrowskilab)** — methodological inspiration
+- **pKaPredict / pKaNET** machine learning based pKa prediction framework  
+- **Machine Learning Meets pKa (czodrowskilab)** methodological inspiration
   for ML-driven pKa estimation  
-- **Dimorphite-DL** — pH-dependent protonation state enumeration  
+- **Dimorphite-DL** pH dependent protonation state enumeration  
   (Ropp PJ *et al.*, *J. Cheminformatics*, 2019)  
-- **RDKit** — open-source cheminformatics toolkit for molecular handling,
+- **RDKit**  open-source cheminformatics toolkit for molecular handling,
   2D/3D structure generation, and minimization
 
 We sincerely thank the authors and maintainers of these projects for providing
