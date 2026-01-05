@@ -284,20 +284,4 @@ and maintenance of this tool.
 
 ---
 
-### 🙏 Acknowledgements (Special thanks)
-
-This tool builds upon several excellent open-source projects and research efforts:
-
-- **pKaPredict / pKaNET** machine learning based pKa prediction framework  
-- **Machine Learning Meets pKa (czodrowskilab)** methodological inspiration
-  for ML-driven pKa estimation  
-- **Dimorphite-DL** pH dependent protonation state enumeration  
-  (Ropp PJ *et al.*, *J. Cheminformatics*, 2019)  
-- **RDKit**  open-source cheminformatics toolkit for molecular handling,
-  2D/3D structure generation, and minimization
-
-We sincerely thank the authors and maintainers of these projects for providing
-robust and well-documented tools that form the foundation of **pKaNET Cloud**.
-        """
-    )
 
