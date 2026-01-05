@@ -12,8 +12,44 @@ from stmol import showmol
 from core import run_job, zip_all_outputs, zip_minimized_only
 
 
-st.set_page_config(page_title="pKaNET Cloud", layout="wide")
-st.title("pKaNET Cloud — pH-adjusted 3D builder + pKa prediction")
+
+st.set_page_config(
+    page_title="pKaNET Cloud",
+    page_icon="🧪",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown(
+    """
+    <style>
+      .block-container {padding-top: 1.2rem; padding-bottom: 2rem;}
+      [data-testid="stSidebar"] {min-width: 320px; max-width: 360px;}
+      .small-note {font-size: 0.92rem; opacity: 0.85;}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+st.markdown(
+    """
+    **pKaNET Cloud** prepares pH-dependent ligand structures for molecular docking
+    and molecular dynamics simulations.
+
+    Workflow:
+    **SMILES / ligand input → pKa prediction → protonation at selected pH →
+    3D structure generation & minimization → export**
+    """
+)
+
+st.caption("Tip: Use **SMI_FILE** to process a list of SMILES in batch.")
+
+st.markdown("---")
+
+with st.expander("What does this tool do? (Workflow)", expanded=False):
+    st.image("Pka_WF.png", use_column_width=True)
+
 
 
 # -----------------------------
@@ -41,20 +77,69 @@ def show_pdb_3d(pdb_text: str):
 # -----------------------------
 # Sidebar controls
 # -----------------------------
-st.sidebar.header("Input / Options")
+st.sidebar.header("Input")
 
-input_type = st.sidebar.selectbox("Input type", ["SMILES", "SMI_FILE", "FILE"], index=0)
+input_type = st.sidebar.radio(
+    "Choose input type",
+    ["SMILES", "SMI_FILE", "FILE"],
+    help="SMILES: single molecule. SMI_FILE: list of SMILES. FILE: upload PDB/MOL2/SDF."
+)
+
+st.sidebar.header("Chemistry settings")
 target_pH = st.sidebar.slider("Target pH", 2.0, 12.0, 7.0, 0.1)
+output_format = st.sidebar.selectbox(
+    "Output format",
+    ["PDB", "SDF", "MOL2"],
+    index=0,
+    help="MOL2 may fall back to SDF depending on server support."
+)
 
-output_format = st.sidebar.selectbox("Output format", ["PDB", "SDF", "MOL2"], index=0)
-
+st.sidebar.header("Naming")
 output_name = st.sidebar.text_input(
-    "Output name (for single SMILES / FILE)",
-    value="ligand"
+    "Base output name",
+    value="ligand",
+    help="Used for single SMILES/FILE. For SMI_FILE, names come from the file."
 )
 
 st.sidebar.markdown("---")
-st.sidebar.caption("Tip: MOL2 may fall back to SDF depending on server build.")
+st.sidebar.markdown(
+    '<div class="small-note">'
+    'Outputs include: minimized structure, a viewer PDB, and a summary file.'
+    '</div>',
+    unsafe_allow_html=True
+)
+
+with st.expander("How to use (examples)", expanded=False):
+    st.markdown(
+        """
+**1) Single SMILES**
+- Select `SMILES`, paste a SMILES, choose pH and output format, then Run.
+
+**2) SMILES list (.smi)**
+- Select `SMI_FILE` and upload a text file with one molecule per line:
+
+```text
+CCO ethanol
+CC(=O)O acetic_acid
+c1ccccc1 benzene
+
+
+---
+
+## 5) Make results section clearer (tabs)
+After the job finishes, present results as tabs:
+
+```python
+tab1, tab2, tab3 = st.tabs(["Overview", "2D / 3D View", "Downloads"])
+
+with tab1:
+    st.text_area("Summary", out["summary_text"], height=220)
+
+with tab2:
+    # your selectbox + 2D + 3D viewer here
+
+with tab3:
+    # your download buttons here
 
 
 # -----------------------------
@@ -172,4 +257,42 @@ if run_btn:
 
     except Exception as e:
         st.error(f"Error: {e}")
+
+st.markdown("---")
+
+
+with st.expander("📌 Please cite us / Acknowledgements", expanded=False):
+    st.markdown(
+        """
+### Please cite us
+
+If you use **pKaNET Cloud** in your research, publications, or presentations,
+please cite the following work:
+
+**DFDD project**  
+Hengphasatporn K *et al.*  
+*Journal of Chemical Information and Modeling* (2026)
+
+Proper citation helps us demonstrate impact and supports continued development
+and maintenance of this tool.
+
+---
+
+### Acknowledgements (Special thanks)
+
+This tool makes use of several excellent open-source projects and research efforts:
+
+- **pKaPredict / pKaNET** — machine-learning–based pKa prediction framework  
+- **Machine Learning Meets pKa (czodrowskilab)** — research and methodological
+  inspiration for ML-based pKa estimation  
+- **Dimorphite-DL** — pH-dependent protonation state enumeration  
+  (Ropp PJ *et al.*, *J. Cheminformatics*, 2019)  
+- **RDKit** — open-source cheminformatics toolkit for molecular handling,
+  2D/3D structure generation, and energy minimization
+
+We sincerely thank the authors and maintainers of these projects for providing
+robust and well-documented foundations for **pKaNET Cloud**.
+        """
+    )
+
 
