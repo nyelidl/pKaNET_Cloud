@@ -51,7 +51,7 @@ and molecular dynamics simulations.
 Workflow:
 **SMILES / ligand input → pKa prediction → protonation at selected pH →
 3D structure generation & minimization → export**
-"""
+    """
 )
 st.caption("Tip: Use **SMI_FILE** to process a list of SMILES in batch.")
 st.markdown("---")
@@ -267,22 +267,4 @@ if run_btn:
 except Exception as e:
     st.error(f"Error: {e}")
 
-st.markdown("---")
-with st.expander("About • Citation • Acknowledgements", expanded=False):
-    st.markdown(
-        """
-### 📌 Please cite us
-
-If you use **pKaNET Cloud** in your research, publications, or presentations,
-please cite the following work:
-
-**DFDD project**  
-Hengphasatporn K *et al.*  
-*Journal of Chemical Information and Modeling* (2026)
-
-Proper citation helps us demonstrate impact and supports continued development
-and maintenance of this tool.
-
----
-)
 
