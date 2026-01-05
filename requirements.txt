@@ -1,7 +1,13 @@
+Cite: DFDD: A Cloud-Ready Workflow for Distance-Guided Fully Dynamic Docking in Host–Guest Complexation, JCIM (2026)
+===================
+
 streamlit
 rdkit-pypi
 dimorphite-dl
 pkapredict
 numpy
 pandas
+py3Dmol
+stmol
 
+===================
