@@ -308,10 +308,18 @@ if run_btn:
                     
                     # Show format warnings if any
                     if "format_warnings" in out and out["format_warnings"]:
-                        with st.expander("⚠️ Format Warnings", expanded=True):
-                            for warning in out["format_warnings"]:
-                                st.warning(warning)
-                            st.info("💡 **Tip:** If MOL2 is not available, PDB and SDF formats are good alternatives for most applications.")
+                        info_warnings = [w for w in out["format_warnings"] if w.startswith("ℹ️")]
+                        error_warnings = [w for w in out["format_warnings"] if not w.startswith("ℹ️")]
+                        
+                        if error_warnings:
+                            with st.expander("⚠️ Format Warnings", expanded=True):
+                                for warning in error_warnings:
+                                    st.warning(warning)
+                                st.info("💡 **Tip:** To enable MOL2 output, install Open Babel: `conda install -c conda-forge openbabel` or `apt-get install openbabel`")
+                        
+                        if info_warnings:
+                            for warning in info_warnings:
+                                st.info(warning)
                     
                     # Display summary with stereoisomer info
                     with st.expander("📊 Summary", expanded=True):
