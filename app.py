@@ -306,6 +306,13 @@ if run_btn:
 
                     st.success("✅ Analysis complete!")
                     
+                    # Show format warnings if any
+                    if "format_warnings" in out and out["format_warnings"]:
+                        with st.expander("⚠️ Format Warnings", expanded=True):
+                            for warning in out["format_warnings"]:
+                                st.warning(warning)
+                            st.info("💡 **Tip:** If MOL2 is not available, PDB and SDF formats are good alternatives for most applications.")
+                    
                     # Display summary with stereoisomer info
                     with st.expander("📊 Summary", expanded=True):
                         st.text(out["summary_text"])
