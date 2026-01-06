@@ -53,7 +53,14 @@ st.markdown("""
 
 st.markdown('<div class="main-header">🧪 pKaNET Cloud</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">AI-Based Protonation & 3D Structure Builder</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">This is a part of DFDD: https://github.com/nyelidl/DFDD</div>', unsafe_allow_html=True)
+
+st.markdown(
+    '<div class="sub-header">'
+    'This is part of the <a href="https://github.com/nyelidl/DFDD" '
+    'target="_blank"><strong>DFDD Project</strong></a>.'
+    '</div>',
+    unsafe_allow_html=True
+)
 
 # Sidebar configuration
 st.sidebar.header("⚙️ Input / Options")
