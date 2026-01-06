@@ -52,8 +52,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-header">🧪 pKaNET Cloud</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">AI-Based Protonation & 3D Structure Builder for All</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">This is a part of DFDD project: https://github.com/nyelidl/DFDD</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">AI-Based Protonation & 3D Structure Builder</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">This is a part of DFDD: https://github.com/nyelidl/DFDD</div>', unsafe_allow_html=True)
 
 # Sidebar configuration
 st.sidebar.header("⚙️ Input / Options")
@@ -64,8 +64,9 @@ output_name = st.sidebar.text_input("Output name (for single SMILES/FILE)", valu
 st.sidebar.header("📄 Output Format")
 output_formats = st.sidebar.multiselect(
     "Select output formats",
-    ["PDB", "SDF", "MOL2"],
-    default=["PDB"]
+    ["PDB", "MOL2"],
+    default=["PDB"],
+    help="SDF is always generated for 3D visualization"
 )
 if not output_formats:
     st.sidebar.warning("⚠️ Please select at least one output format")
@@ -79,8 +80,8 @@ else:
     st.sidebar.info("ℹ️ 2D visualization not available on this server")
 show_3d = st.sidebar.checkbox("Show 3D structure", value=True)
 
-viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 400, 50)
-viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 200, 50)
+viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 300, 50)
+viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 300, 50)
 
 smiles_text = None
 uploaded = None
@@ -210,15 +211,17 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
     # File information
     with st.expander("📁 Output Files"):
         available_files = []
+        # Only show user-selected formats (not SDF, which is for visualization only)
         if "minimized_pdb" in result and result["minimized_pdb"]:
-            available_files.append(f"- **PDB:** `{Path(result['minimized_pdb']).name}`")
-        if "minimized_sdf" in result and result["minimized_sdf"]:
-            available_files.append(f"- **SDF:** `{Path(result['minimized_sdf']).name}`")
+            if "PDB" in output_formats:
+                available_files.append(f"- **PDB:** `{Path(result['minimized_pdb']).name}`")
         if "minimized_mol2" in result and result["minimized_mol2"]:
-            available_files.append(f"- **MOL2:** `{Path(result['minimized_mol2']).name}`")
+            if "MOL2" in output_formats:
+                available_files.append(f"- **MOL2:** `{Path(result['minimized_mol2']).name}`")
         
         if available_files:
             st.markdown("\n".join(available_files))
+            st.info("ℹ️ SDF files are generated automatically for 3D visualization")
         else:
             st.warning("No output files generated")
 
@@ -342,7 +345,6 @@ st.sidebar.markdown("### 📚 Citation")
 st.sidebar.markdown("""
 If you use this tool, please cite:
 - DFDD project: Hengphasatporn K et al., JCIM (2026)
-GitHub: https://github.com/nyelidl/DFDD
 - Dimorphite-DL: Ropp PJ et al., J Cheminform (2019)
 
 We thank **Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski**

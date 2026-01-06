@@ -198,7 +198,7 @@ def run_job(
     target_pH: float,
     output_name: str,
     out_dir: str,
-    output_formats: List[str] = None,  # ["PDB", "SDF", "MOL2"]
+    output_formats: List[str] = None,  # ["PDB", "MOL2"] - SDF is always generated
 ) -> Dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -206,6 +206,11 @@ def run_job(
     # Default to PDB if no formats specified
     if output_formats is None or len(output_formats) == 0:
         output_formats = ["PDB"]
+    
+    # Always include SDF for 3D visualization (even if not in user selection)
+    formats_to_save = list(output_formats)
+    if "SDF" not in formats_to_save:
+        formats_to_save.append("SDF")
 
     ligands_raw = []
 
@@ -278,9 +283,9 @@ def run_job(
         ph_smiles, formal_charge = ph_adjust_smiles_dimorphite(base_smiles, target_pH)
         mol_min = build_minimized_3d(ph_smiles)
 
-        # Save in requested formats
+        # Save in requested formats (plus SDF for visualization)
         base_file_path = str(out / f"{base_name}{suffix}_min")
-        saved_files = save_molecule_files(mol_min, base_file_path, output_formats)
+        saved_files = save_molecule_files(mol_min, base_file_path, formats_to_save)
 
         result_entry = {
             "name": pretty_name,
@@ -290,7 +295,7 @@ def run_job(
             "formal_charge": formal_charge,
         }
         
-        # Add file paths to result
+        # Add file paths to result (SDF always included for visualization)
         if "pdb" in saved_files:
             result_entry["minimized_pdb"] = saved_files["pdb"]
         if "sdf" in saved_files:
@@ -313,6 +318,23 @@ def run_job(
         summary_lines.append("")
     summary_text = "\n".join(summary_lines).strip()
     (out / "summary.txt").write_text(summary_text + "\n")
+    
+    # Create log file for SMI_FILE input with SMILES and charges
+    if input_type == "SMI_FILE" and len(results) > 0:
+        log_lines = []
+        log_lines.append("# pKaNET Cloud - Processing Log")
+        log_lines.append(f"# Target pH: {target_pH}")
+        log_lines.append(f"# Total molecules processed: {len(results)}")
+        log_lines.append("#" + "="*70)
+        log_lines.append("")
+        log_lines.append("# Format: Name | pH-adjusted SMILES | Formal Charge | pKa (predicted)")
+        log_lines.append("")
+        
+        for r in results:
+            pka_str = f"{r['pka_pred']:.2f}" if r["pka_pred"] is not None else "N/A"
+            log_lines.append(f"{r['name']}\t{r['ph_smiles']}\t{r['formal_charge']}\t{pka_str}")
+        
+        (out / "processing.log").write_text("\n".join(log_lines) + "\n")
 
     return {"results": results, "summary_text": summary_text, "out_dir": str(out)}
 
