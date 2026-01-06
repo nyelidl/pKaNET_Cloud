@@ -4,9 +4,23 @@ from pathlib import Path
 from core import run_job, zip_all_outputs, zip_minimized_pdb_only
 import streamlit.components.v1 as components
 from rdkit import Chem
-from rdkit.Chem import Draw, AllChem
-from PIL import Image
+from rdkit.Chem import AllChem
 import io
+
+# Fix for RDKit Draw on headless servers
+try:
+    from rdkit.Chem import Draw
+    DRAW_AVAILABLE = True
+except (ImportError, OSError) as e:
+    # RDKit Draw not available (missing X11 libraries on headless server)
+    DRAW_AVAILABLE = False
+    print(f"Warning: RDKit Draw not available: {e}")
+    # Create a fallback Draw module
+    class DrawFallback:
+        @staticmethod
+        def MolToImage(*args, **kwargs):
+            return None
+    Draw = DrawFallback()
 
 st.set_page_config(page_title="pKaNET Cloud", layout="wide", page_icon="🧪")
 
@@ -57,7 +71,11 @@ if not output_formats:
 
 # Add visualization options
 st.sidebar.header("🎨 Visualization Options")
-show_2d = st.sidebar.checkbox("Show 2D structure", value=True)
+if DRAW_AVAILABLE:
+    show_2d = st.sidebar.checkbox("Show 2D structure", value=True)
+else:
+    show_2d = False
+    st.sidebar.info("ℹ️ 2D visualization not available on this server")
 show_3d = st.sidebar.checkbox("Show 3D structure", value=True)
 viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 600, 50)
 viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 400, 50)
@@ -78,6 +96,9 @@ else:
 # Helper function for 2D visualization
 def draw_molecule_2d(smiles_str, size=(400, 300)):
     """Generate 2D molecular structure image"""
+    if not DRAW_AVAILABLE:
+        return None
+    
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol is None:
@@ -86,7 +107,7 @@ def draw_molecule_2d(smiles_str, size=(400, 300)):
         img = Draw.MolToImage(mol, size=size)
         return img
     except Exception as e:
-        st.error(f"Error drawing 2D structure: {e}")
+        st.warning(f"Could not generate 2D structure: {e}")
         return None
 
 # Helper function for 3D visualization
@@ -233,11 +254,15 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
         if show_2d:
             with viz_col1:
                 st.markdown("**2D Structure (pH-adjusted)**")
-                img_2d = draw_molecule_2d(result["ph_smiles"], size=(400, 300))
-                if img_2d:
-                    st.image(img_2d, use_container_width=True)
+                if DRAW_AVAILABLE:
+                    img_2d = draw_molecule_2d(result["ph_smiles"], size=(400, 300))
+                    if img_2d:
+                        st.image(img_2d, use_container_width=True)
+                    else:
+                        st.warning("Could not generate 2D structure")
                 else:
-                    st.warning("Could not generate 2D structure")
+                    st.info("2D visualization requires additional system libraries")
+                    st.code(result["ph_smiles"], language=None)
         
         # 3D Structure
         if show_3d:
