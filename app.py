@@ -95,14 +95,32 @@ uploaded = None
 
 # Input section
 if input_type == "SMILES":
-st.markdown('<div class="sub-header">Example: CC(C)CC1=CC=C(C=C1)C(C)C(=O)O</div>', unsafe_allow_html=True)
-    smiles_text = st.text_area("SMILES", height=120, placeholder="Paste a SMILES here: ")
+    st.markdown(
+        '<div class="sub-header">'
+        'Example: CC(C)CC1=CC=C(C=C1)C(C)C(=O)O'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    smiles_text = st.text_area(
+        "SMILES",
+        height=120,
+        placeholder="Paste a SMILES here:",
+    )
+
 elif input_type == "SMI_FILE":
-    uploaded = st.file_uploader("Upload .smi (SMILES [name] per line)", type=["smi", "txt"])
+    uploaded = st.file_uploader(
+        "Upload .smi (SMILES [name] per line)",
+        type=["smi", "txt"],
+    )
     st.info("📝 Format: `SMILES [optional_name]` per line")
+
 else:
-    uploaded = st.file_uploader("Upload ligand file", type=["pdb", "mol2", "sdf"])
+    uploaded = st.file_uploader(
+        "Upload ligand file",
+        type=["pdb", "mol2", "sdf"],
+    )
     st.info("📁 Supported formats: PDB, MOL2, SDF")
+
 
 # Helper function for 2D visualization
 def draw_molecule_2d(smiles_str, size=(400, 300)):
