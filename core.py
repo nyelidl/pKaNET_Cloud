@@ -199,6 +199,7 @@ def run_job(
     output_name: str,
     out_dir: str,
     output_formats: List[str] = None,  # ["PDB", "MOL2"] - SDF is always generated
+    enumerate_stereoisomers: bool = True,  # NEW PARAMETER
 ) -> Dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -262,9 +263,15 @@ def run_job(
     else:
         raise ValueError("Unknown input_type")
 
+    # MODIFIED: Only enumerate stereoisomers if requested
     ligands = []
-    for lig in ligands_raw:
-        ligands.extend(generate_RS_variants(lig["base_smiles"], lig["name"]))
+    if enumerate_stereoisomers:
+        for lig in ligands_raw:
+            ligands.extend(generate_RS_variants(lig["base_smiles"], lig["name"]))
+    else:
+        # Skip enumeration - use original SMILES as-is
+        for lig in ligands_raw:
+            ligands.append({"name": lig["name"], "stereo": None, "base_smiles": lig["base_smiles"]})
 
     results = []
     for lig in ligands:
@@ -295,6 +302,10 @@ def run_job(
             "formal_charge": formal_charge,
         }
         
+        # Add stereoisomer ID if it was enumerated
+        if stereo:
+            result_entry["stereoisomer_id"] = stereo
+        
         # Add file paths to result (SDF always included for visualization)
         if "pdb" in saved_files:
             result_entry["minimized_pdb"] = saved_files["pdb"]
@@ -315,6 +326,8 @@ def run_job(
             summary_lines.append(f"  pKa (ML)   : {r['pka_pred']:.2f}")
         summary_lines.append(f"  Charge     : {r['formal_charge']}")
         summary_lines.append(f"  Formats    : {', '.join(output_formats)}")
+        if "stereoisomer_id" in r:
+            summary_lines.append(f"  Stereoisomer: {r['stereoisomer_id']}")
         summary_lines.append("")
     summary_text = "\n".join(summary_lines).strip()
     (out / "summary.txt").write_text(summary_text + "\n")
@@ -324,6 +337,7 @@ def run_job(
         log_lines = []
         log_lines.append("# pKaNET Cloud - Processing Log")
         log_lines.append(f"# Target pH: {target_pH}")
+        log_lines.append(f"# Stereoisomer enumeration: {'enabled' if enumerate_stereoisomers else 'disabled'}")
         log_lines.append(f"# Total molecules processed: {len(results)}")
         log_lines.append("#" + "="*70)
         log_lines.append("")

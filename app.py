@@ -57,7 +57,7 @@ st.markdown(
     '<div class="sub-header">'
     'Machine-Learning–Driven Protonation & pH-Aware 3D Structure Generation<br>'
     '<span style="font-size:0.9em; font-weight:normal;">'
-    'Instant pH-aware 3D structures for docking, virtual screening, and education — '
+    'Instant pH-aware 3D structures for docking, virtual screening, and education – '
     'with automatic R/S stereoisomer enumeration.'
     '</span>'
     '</div>',
@@ -78,6 +78,14 @@ st.sidebar.header("⚙️ Input / Options")
 input_type = st.sidebar.selectbox("Input type", ["SMILES", "SMI_FILE", "FILE"])
 target_pH = st.sidebar.slider("Target pH", 2.0, 12.0, 7.0, 0.1)
 output_name = st.sidebar.text_input("Output name (for single SMILES/FILE)", value="ligand")
+
+# Add stereoisomer enumeration option
+st.sidebar.header("🧬 Stereochemistry")
+enumerate_stereoisomers = st.sidebar.checkbox(
+    "Enumerate R/S stereoisomers",
+    value=True,
+    help="Automatically generate all possible R/S stereoisomers for undefined chiral centers"
+)
 
 st.sidebar.header("📄 Output Format")
 output_formats = st.sidebar.multiselect(
@@ -124,7 +132,7 @@ else:
         "Upload ligand file",
         type=["pdb", "mol2", "sdf"],
     )
-    st.info("📁 Supported formats: PDB, MOL2, SDF")
+    st.info("📝 Supported formats: PDB, MOL2, SDF")
 
 
 # Helper function for 2D visualization
@@ -186,6 +194,9 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
             st.markdown(f"**Predicted pKa:** `{result['pka_pred']:.2f}`")
         st.markdown(f"**Formal Charge:** `{result['formal_charge']}`")
         st.markdown(f"**Target pH:** `{target_pH}`")
+        # Show stereoisomer info if available
+        if "stereoisomer_id" in result:
+            st.markdown(f"**Stereoisomer:** `{result['stereoisomer_id']}`")
     
     # Visualization section
     if show_2d or show_3d:
@@ -284,13 +295,16 @@ if run_btn:
                         output_name=output_name,
                         out_dir=str(out_dir),
                         output_formats=output_formats,
+                        enumerate_stereoisomers=enumerate_stereoisomers,  # Pass the new parameter
                     )
 
                     st.success("✅ Analysis complete!")
                     
-                    # Display summary
+                    # Display summary with stereoisomer info
                     with st.expander("📊 Summary", expanded=True):
                         st.text(out["summary_text"])
+                        if enumerate_stereoisomers and len(out["results"]) > 1:
+                            st.info(f"🧬 Generated {len(out['results'])} stereoisomer(s)")
                     
                     # Display results for each ligand
                     st.header("📈 Results")
@@ -379,7 +393,7 @@ If you use this tool, please cite:
 - Dimorphite-DL: Ropp PJ et al., J Cheminform (2019)
 
 We thank **Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski**
-for developing **pKaPredict** and the study *“Machine Learning Meets pKa”*,
+for developing **pKaPredict** and the study *"Machine Learning Meets pKa"*,
 which inspired **pKaNET-Cloud**.
 
 """)
