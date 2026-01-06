@@ -58,7 +58,7 @@ st.markdown(
     'Machine-Learning–Driven Protonation & pH-Aware 3D Structure Generation<br>'
     '<span style="font-size:0.9em; font-weight:normal;">'
     'Instant pH-aware 3D structures for docking, virtual screening, and education — '
-    'with automatic R/S stereoisomer enumeration. No setup required.'
+    'with automatic R/S stereoisomer enumeration.'
     '</span>'
     '</div>',
     unsafe_allow_html=True
