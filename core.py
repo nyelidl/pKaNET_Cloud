@@ -22,7 +22,6 @@ def get_model():
     return _PKANET_MODEL
 
 
-# ---- paste your helper functions here (edited: remove IPython/display/py3Dmol) ----
 def predict_pka_pkanet(smiles: str) -> float:
     smiles = smiles.strip()
     mol = Chem.MolFromSmiles(smiles)
@@ -137,50 +136,51 @@ def generate_RS_variants(base_smiles: str, base_name: str):
 def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, str]:
     """
     Save molecule to multiple file formats.
+    Always generates SDF for visualization. User-selected formats are also saved.
     
     Args:
         mol: RDKit molecule object
         base_path: Base file path without extension
-        formats: List of formats to save (e.g., ["PDB", "SDF", "MOL2"])
+        formats: List of formats to save (e.g., ["PDB", "MOL2"])
     
     Returns:
         Dictionary mapping format to file path
     """
     saved_files = {}
     
+    # Always save SDF first (for visualization)
+    try:
+        sdf_path = f"{base_path}.sdf"
+        writer = Chem.SDWriter(sdf_path)
+        writer.write(mol)
+        writer.close()
+        saved_files["sdf"] = sdf_path
+    except Exception as e:
+        print(f"Warning: Could not save SDF format: {e}")
+    
+    # Now save user-requested formats
     for fmt in formats:
         fmt_upper = fmt.upper()
         
+        # Skip SDF if already saved
+        if fmt_upper == "SDF":
+            continue
+            
         try:
             if fmt_upper == "PDB":
                 file_path = f"{base_path}.pdb"
                 Chem.MolToPDBFile(mol, file_path)
                 saved_files["pdb"] = file_path
                 
-            elif fmt_upper == "SDF":
-                file_path = f"{base_path}.sdf"
-                writer = Chem.SDWriter(file_path)
-                writer.write(mol)
-                writer.close()
-                saved_files["sdf"] = file_path
-                
             elif fmt_upper == "MOL2":
                 file_path = f"{base_path}.mol2"
-                # Try to write MOL2, fall back to SDF if not available
                 try:
                     Chem.MolToMol2File(mol, file_path)
                     saved_files["mol2"] = file_path
                 except (AttributeError, RuntimeError) as e:
-                    # MOL2 writing not available in this RDKit build
-                    print(f"Warning: MOL2 format not available, using SDF instead. Error: {e}")
-                    file_path = f"{base_path}.sdf"
-                    if "sdf" not in saved_files:
-                        writer = Chem.SDWriter(file_path)
-                        writer.write(mol)
-                        writer.close()
-                        saved_files["mol2"] = file_path  # Map mol2 request to sdf file
-                    else:
-                        saved_files["mol2"] = saved_files["sdf"]
+                    print(f"Warning: MOL2 format not available in this RDKit build: {e}")
+                    # Don't fall back to SDF - just skip MOL2
+                    continue
         
         except Exception as e:
             print(f"Warning: Could not save {fmt_upper} format: {e}")
@@ -191,15 +191,15 @@ def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, st
 
 def run_job(
     *,
-    input_type: str,          # "SMILES" | "SMI_FILE" | "FILE"
+    input_type: str,
     smiles_text: str | None,
     uploaded_bytes: bytes | None,
     uploaded_name: str | None,
     target_pH: float,
     output_name: str,
     out_dir: str,
-    output_formats: List[str] = None,  # ["PDB", "MOL2"] - SDF is always generated
-    enumerate_stereoisomers: bool = True,  # NEW PARAMETER
+    output_formats: List[str] = None,
+    enumerate_stereoisomers: bool = True,
 ) -> Dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -208,10 +208,8 @@ def run_job(
     if output_formats is None or len(output_formats) == 0:
         output_formats = ["PDB"]
     
-    # Always include SDF for 3D visualization (even if not in user selection)
-    formats_to_save = list(output_formats)
-    if "SDF" not in formats_to_save:
-        formats_to_save.append("SDF")
+    # User-selected formats (SDF is handled separately, always generated)
+    formats_to_save = [fmt.upper() for fmt in output_formats]
 
     ligands_raw = []
 
@@ -263,13 +261,12 @@ def run_job(
     else:
         raise ValueError("Unknown input_type")
 
-    # MODIFIED: Only enumerate stereoisomers if requested
+    # Enumerate stereoisomers if requested
     ligands = []
     if enumerate_stereoisomers:
         for lig in ligands_raw:
             ligands.extend(generate_RS_variants(lig["base_smiles"], lig["name"]))
     else:
-        # Skip enumeration - use original SMILES as-is
         for lig in ligands_raw:
             ligands.append({"name": lig["name"], "stereo": None, "base_smiles": lig["base_smiles"]})
 
@@ -290,7 +287,7 @@ def run_job(
         ph_smiles, formal_charge = ph_adjust_smiles_dimorphite(base_smiles, target_pH)
         mol_min = build_minimized_3d(ph_smiles)
 
-        # Save in requested formats (plus SDF for visualization)
+        # Save molecule in requested formats (SDF always included)
         base_file_path = str(out / f"{base_name}{suffix}_min")
         saved_files = save_molecule_files(mol_min, base_file_path, formats_to_save)
 
@@ -306,7 +303,7 @@ def run_job(
         if stereo:
             result_entry["stereoisomer_id"] = stereo
         
-        # Add file paths to result (SDF always included for visualization)
+        # Add file paths to result
         if "pdb" in saved_files:
             result_entry["minimized_pdb"] = saved_files["pdb"]
         if "sdf" in saved_files:
@@ -316,7 +313,7 @@ def run_job(
         
         results.append(result_entry)
 
-    # write a summary file for the UI
+    # Write summary file
     summary_lines = []
     for r in results:
         summary_lines.append(f"{r['name']}")
@@ -325,14 +322,24 @@ def run_job(
         if r["pka_pred"] is not None:
             summary_lines.append(f"  pKa (ML)   : {r['pka_pred']:.2f}")
         summary_lines.append(f"  Charge     : {r['formal_charge']}")
-        summary_lines.append(f"  Formats    : {', '.join(output_formats)}")
+        
+        # Show what formats were actually generated
+        generated_formats = []
+        if "minimized_pdb" in r:
+            generated_formats.append("PDB")
+        if "minimized_mol2" in r:
+            generated_formats.append("MOL2")
+        if "minimized_sdf" in r:
+            generated_formats.append("SDF")
+        summary_lines.append(f"  Formats    : {', '.join(generated_formats)}")
+        
         if "stereoisomer_id" in r:
             summary_lines.append(f"  Stereoisomer: {r['stereoisomer_id']}")
         summary_lines.append("")
     summary_text = "\n".join(summary_lines).strip()
     (out / "summary.txt").write_text(summary_text + "\n")
     
-    # Create log file for SMI_FILE input with SMILES and charges
+    # Create log file for SMI_FILE input
     if input_type == "SMI_FILE" and len(results) > 0:
         log_lines = []
         log_lines.append("# pKaNET Cloud - Processing Log")
