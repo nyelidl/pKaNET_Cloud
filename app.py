@@ -136,90 +136,6 @@ def create_3dmol_viewer(file_content, width=600, height=400, file_format="sdf"):
 
 run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
 
-if run_btn:
-    # Validation
-    if input_type == "SMILES" and not smiles_text:
-        st.error("⚠️ Please enter a SMILES string")
-    elif input_type in ["SMI_FILE", "FILE"] and not uploaded:
-        st.error("⚠️ Please upload a file")
-    elif not output_formats:
-        st.error("⚠️ Please select at least one output format")
-    else:
-        try:
-            with st.spinner("🔬 Running pKa prediction and 3D generation..."):
-                with tempfile.TemporaryDirectory() as tmp:
-                    tmp = Path(tmp)
-
-                    uploaded_bytes = uploaded.read() if uploaded else None
-                    uploaded_name = uploaded.name if uploaded else None
-
-                    out_dir = tmp / "out"
-                    out = run_job(
-                        input_type=input_type,
-                        smiles_text=smiles_text,
-                        uploaded_bytes=uploaded_bytes,
-                        uploaded_name=uploaded_name,
-                        target_pH=target_pH,
-                        output_name=output_name,
-                        out_dir=str(out_dir),
-                        output_formats=output_formats,
-                    )
-
-                    st.success("✅ Analysis complete!")
-                    
-                    # Display summary
-                    with st.expander("📊 Summary", expanded=True):
-                        st.text(out["summary_text"])
-                    
-                    # Display results for each ligand
-                    st.header("📈 Results")
-                    
-                    results = out["results"]
-                    
-                    # Create tabs for multiple ligands or columns for single ligand
-                    if len(results) > 1:
-                        tabs = st.tabs([r["name"] for r in results])
-                        
-                        for tab, result in zip(tabs, results):
-                            with tab:
-                                display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
-                    else:
-                        # Single ligand - use columns
-                        result = results[0]
-                        display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
-                    
-                    # Download section
-                    st.header("💾 Downloads")
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        # ZIP everything
-                        zip_all = tmp / "all_outputs.zip"
-                        zip_all_outputs(str(out_dir), str(zip_all))
-                        st.download_button(
-                            "📦 Download ALL outputs (ZIP)",
-                            data=zip_all.read_bytes(),
-                            file_name="pkanet_outputs.zip",
-                            mime="application/zip",
-                            use_container_width=True
-                        )
-                    
-                    with col2:
-                        # ZIP only minimized PDB
-                        zip_pdb = tmp / "minimized_pdb_only.zip"
-                        zip_minimized_pdb_only(str(out_dir), str(zip_pdb))
-                        st.download_button(
-                            "🧬 Download minimized PDB only (ZIP)",
-                            data=zip_pdb.read_bytes(),
-                            file_name="minimized_pdb_outputs.zip",
-                            mime="application/zip",
-                            use_container_width=True
-                        )
-
-        except Exception as e:
-            st.error(f"❌ Error: {e}")
-            st.exception(e)
-
 
 def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height):
     """Display results for a single ligand"""
@@ -309,6 +225,91 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
             st.markdown("\n".join(available_files))
         else:
             st.warning("No output files generated")
+
+
+if run_btn:
+    # Validation
+    if input_type == "SMILES" and not smiles_text:
+        st.error("⚠️ Please enter a SMILES string")
+    elif input_type in ["SMI_FILE", "FILE"] and not uploaded:
+        st.error("⚠️ Please upload a file")
+    elif not output_formats:
+        st.error("⚠️ Please select at least one output format")
+    else:
+        try:
+            with st.spinner("🔬 Running pKa prediction and 3D generation..."):
+                with tempfile.TemporaryDirectory() as tmp:
+                    tmp = Path(tmp)
+
+                    uploaded_bytes = uploaded.read() if uploaded else None
+                    uploaded_name = uploaded.name if uploaded else None
+
+                    out_dir = tmp / "out"
+                    out = run_job(
+                        input_type=input_type,
+                        smiles_text=smiles_text,
+                        uploaded_bytes=uploaded_bytes,
+                        uploaded_name=uploaded_name,
+                        target_pH=target_pH,
+                        output_name=output_name,
+                        out_dir=str(out_dir),
+                        output_formats=output_formats,
+                    )
+
+                    st.success("✅ Analysis complete!")
+                    
+                    # Display summary
+                    with st.expander("📊 Summary", expanded=True):
+                        st.text(out["summary_text"])
+                    
+                    # Display results for each ligand
+                    st.header("📈 Results")
+                    
+                    results = out["results"]
+                    
+                    # Create tabs for multiple ligands or columns for single ligand
+                    if len(results) > 1:
+                        tabs = st.tabs([r["name"] for r in results])
+                        
+                        for tab, result in zip(tabs, results):
+                            with tab:
+                                display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
+                    else:
+                        # Single ligand - use columns
+                        result = results[0]
+                        display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
+                    
+                    # Download section
+                    st.header("💾 Downloads")
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        # ZIP everything
+                        zip_all = tmp / "all_outputs.zip"
+                        zip_all_outputs(str(out_dir), str(zip_all))
+                        st.download_button(
+                            "📦 Download ALL outputs (ZIP)",
+                            data=zip_all.read_bytes(),
+                            file_name="pkanet_outputs.zip",
+                            mime="application/zip",
+                            use_container_width=True
+                        )
+                    
+                    with col2:
+                        # ZIP only minimized PDB
+                        zip_pdb = tmp / "minimized_pdb_only.zip"
+                        zip_minimized_pdb_only(str(out_dir), str(zip_pdb))
+                        st.download_button(
+                            "🧬 Download minimized PDB only (ZIP)",
+                            data=zip_pdb.read_bytes(),
+                            file_name="minimized_pdb_outputs.zip",
+                            mime="application/zip",
+                            use_container_width=True
+                        )
+
+        except Exception as e:
+            st.error(f"❌ Error: {e}")
+            st.exception(e)
 
 
 # Sidebar info
