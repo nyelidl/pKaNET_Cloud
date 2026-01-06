@@ -77,8 +77,18 @@ else:
     show_2d = False
     st.sidebar.info("ℹ️ 2D visualization not available on this server")
 show_3d = st.sidebar.checkbox("Show 3D structure", value=True)
-viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 400, 50)
-viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 200, 50)
+
+if show_3d:
+    viz_style = st.sidebar.selectbox(
+        "3D style",
+        ["Stick", "Ball and Stick", "Sphere"],
+        index=1
+    )
+else:
+    viz_style = "Ball and Stick"
+
+viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 600, 50)
+viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 400, 50)
 
 smiles_text = None
 uploaded = None
@@ -111,8 +121,67 @@ def draw_molecule_2d(smiles_str, size=(400, 300)):
         return None
 
 # Helper function for 3D visualization
-def create_3dmol_viewer(file_content, width=600, height=400, file_format="sdf"):
-    """Create py3Dmol viewer HTML"""
+def create_3dmol_viewer(file_content, width=600, height=400, file_format="sdf", style="Ball and Stick"):
+    """Create py3Dmol viewer HTML with hydrogens visible"""
+    
+    # Define styles based on selection
+    if style == "Stick":
+        style_js = """
+        viewer.setStyle({}, {
+            stick: {
+                radius: 0.15,
+                colorscheme: 'default'
+            }
+        });
+        // Hydrogens slightly thinner
+        viewer.setStyle({elem: 'H'}, {
+            stick: {
+                radius: 0.1,
+                color: 'white'
+            }
+        });
+        """
+    elif style == "Ball and Stick":
+        style_js = """
+        viewer.setStyle({}, {
+            stick: {
+                radius: 0.15,
+                colorscheme: 'default'
+            },
+            sphere: {
+                scale: 0.3,
+                colorscheme: 'default'
+            }
+        });
+        // Hydrogens with smaller spheres
+        viewer.setStyle({elem: 'H'}, {
+            stick: {
+                radius: 0.1,
+                color: 'white'
+            },
+            sphere: {
+                scale: 0.2,
+                color: 'white'
+            }
+        });
+        """
+    else:  # Sphere
+        style_js = """
+        viewer.setStyle({}, {
+            sphere: {
+                scale: 0.4,
+                colorscheme: 'default'
+            }
+        });
+        // Hydrogens visible
+        viewer.setStyle({elem: 'H'}, {
+            sphere: {
+                scale: 0.25,
+                color: 'white'
+            }
+        });
+        """
+    
     html_template = f"""
     <div id="container" style="width: {width}px; height: {height}px; position: relative;"></div>
     <script src="https://3Dmol.csb.pitt.edu/build/3Dmol-min.js"></script>
@@ -124,7 +193,9 @@ def create_3dmol_viewer(file_content, width=600, height=400, file_format="sdf"):
         let fileData = `{file_content}`;
         
         viewer.addModel(fileData, "{file_format}");
-        viewer.setStyle({{}}, {{stick: {{radius: 0.15}}, sphere: {{scale: 0.25}}}});
+        
+        {style_js}
+        
         viewer.zoomTo();
         viewer.render();
         
@@ -137,7 +208,7 @@ def create_3dmol_viewer(file_content, width=600, height=400, file_format="sdf"):
 run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
 
 
-def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height):
+def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height, viz_style="Ball and Stick"):
     """Display results for a single ligand"""
     
     # Molecular information
@@ -180,22 +251,26 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
                     st.info("2D visualization requires additional system libraries")
                     st.code(result["ph_smiles"], language=None)
         
-        # 3D Structure
+        # 3D Structure - Always use SDF for best hydrogen display
         if show_3d:
             target_col = viz_col2 if viz_col2 else viz_col1
             with target_col:
                 st.markdown("**3D Structure (Minimized)**")
-                # Use SDF for visualization if available, otherwise PDB
-                sdf_key = "minimized_sdf"
-                pdb_key = "minimized_pdb"
                 
+                # Always prefer SDF for 3D visualization (best for showing hydrogens)
                 viz_file = None
-                if sdf_key in result and result[sdf_key]:
-                    viz_file = Path(result[sdf_key])
-                    file_format = "sdf"
-                elif pdb_key in result and result[pdb_key]:
-                    viz_file = Path(result[pdb_key])
+                file_format = "sdf"
+                
+                if "minimized_sdf" in result and result["minimized_sdf"]:
+                    viz_file = Path(result["minimized_sdf"])
+                elif "minimized_pdb" in result and result["minimized_pdb"]:
+                    # Fallback to PDB if SDF not available
+                    viz_file = Path(result["minimized_pdb"])
                     file_format = "pdb"
+                elif "minimized_mol2" in result and result["minimized_mol2"]:
+                    # Last resort: MOL2
+                    viz_file = Path(result["minimized_mol2"])
+                    file_format = "mol2"
                 
                 if viz_file and viz_file.exists():
                     with open(viz_file, "r") as f:
@@ -204,10 +279,10 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
                     # Escape special characters for JavaScript
                     file_content = file_content.replace('`', '\\`').replace('${', '\\${')
                     
-                    viewer_html = create_3dmol_viewer(file_content, viewer_width, viewer_height, file_format)
+                    viewer_html = create_3dmol_viewer(file_content, viewer_width, viewer_height, file_format, viz_style)
                     components.html(viewer_html, height=viewer_height + 50, scrolling=False)
                     
-                    st.caption("🖱️ Click and drag to rotate • Scroll to zoom")
+                    st.caption(f"🖱️ Click and drag to rotate • Scroll to zoom")
                 else:
                     st.warning("3D structure file not found")
     
@@ -273,11 +348,11 @@ if run_btn:
                         
                         for tab, result in zip(tabs, results):
                             with tab:
-                                display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
+                                display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height, viz_style)
                     else:
                         # Single ligand - use columns
                         result = results[0]
-                        display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
+                        display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height, viz_style)
                     
                     # Download section
                     st.header("💾 Downloads")
@@ -328,6 +403,10 @@ st.sidebar.markdown("""
 If you use this tool, please cite:
 - DFDD project: Hengphasatporn K et al., JCIM (2026)
 - Dimorphite-DL: Ropp PJ et al., J Cheminform (2019)
+
+We gratefully acknowledge Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski for developing pKaPredict, as well as for the study “Machine Learning Meets pKa”, which provided valuable context and inspiration for the pKaNET-Cloud module used in this work.
+
+
 """)
 
 # Footer
