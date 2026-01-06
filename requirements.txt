@@ -4,3 +4,4 @@ dimorphite-dl
 pkapredict
 numpy
 pandas
+pillow

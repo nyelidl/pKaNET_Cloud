@@ -134,6 +134,61 @@ def generate_RS_variants(base_smiles: str, base_name: str):
     return variants or [{"name": base_name, "stereo": None, "base_smiles": Chem.MolToSmiles(isomers[0], isomericSmiles=True)}]
 
 
+def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, str]:
+    """
+    Save molecule to multiple file formats.
+    
+    Args:
+        mol: RDKit molecule object
+        base_path: Base file path without extension
+        formats: List of formats to save (e.g., ["PDB", "SDF", "MOL2"])
+    
+    Returns:
+        Dictionary mapping format to file path
+    """
+    saved_files = {}
+    
+    for fmt in formats:
+        fmt_upper = fmt.upper()
+        
+        try:
+            if fmt_upper == "PDB":
+                file_path = f"{base_path}.pdb"
+                Chem.MolToPDBFile(mol, file_path)
+                saved_files["pdb"] = file_path
+                
+            elif fmt_upper == "SDF":
+                file_path = f"{base_path}.sdf"
+                writer = Chem.SDWriter(file_path)
+                writer.write(mol)
+                writer.close()
+                saved_files["sdf"] = file_path
+                
+            elif fmt_upper == "MOL2":
+                file_path = f"{base_path}.mol2"
+                # Try to write MOL2, fall back to SDF if not available
+                try:
+                    Chem.MolToMol2File(mol, file_path)
+                    saved_files["mol2"] = file_path
+                except (AttributeError, RuntimeError) as e:
+                    # MOL2 writing not available in this RDKit build
+                    print(f"Warning: MOL2 format not available, using SDF instead. Error: {e}")
+                    file_path = f"{base_path}.sdf"
+                    if "sdf" not in saved_files:
+                        writer = Chem.SDWriter(file_path)
+                        writer.write(mol)
+                        writer.close()
+                        saved_files["mol2"] = file_path  # Map mol2 request to sdf file
+                    else:
+                        saved_files["mol2"] = saved_files["sdf"]
+        
+        except Exception as e:
+            print(f"Warning: Could not save {fmt_upper} format: {e}")
+            continue
+    
+    return saved_files
+
+
 def run_job(
     *,
     input_type: str,          # "SMILES" | "SMI_FILE" | "FILE"
@@ -143,9 +198,14 @@ def run_job(
     target_pH: float,
     output_name: str,
     out_dir: str,
+    output_formats: List[str] = None,  # ["PDB", "SDF", "MOL2"]
 ) -> Dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    
+    # Default to PDB if no formats specified
+    if output_formats is None or len(output_formats) == 0:
+        output_formats = ["PDB"]
 
     ligands_raw = []
 
@@ -218,22 +278,27 @@ def run_job(
         ph_smiles, formal_charge = ph_adjust_smiles_dimorphite(base_smiles, target_pH)
         mol_min = build_minimized_3d(ph_smiles)
 
-        minimized_pdb = out / f"{base_name}{suffix}_min.pdb"
-        minimized_sdf = out / f"{base_name}{suffix}_min.sdf"
-        Chem.MolToPDBFile(mol_min, str(minimized_pdb))
-        w = Chem.SDWriter(str(minimized_sdf))
-        w.write(mol_min)
-        w.close()
+        # Save in requested formats
+        base_file_path = str(out / f"{base_name}{suffix}_min")
+        saved_files = save_molecule_files(mol_min, base_file_path, output_formats)
 
-        results.append({
+        result_entry = {
             "name": pretty_name,
             "base_smiles": base_smiles,
             "ph_smiles": ph_smiles,
             "pka_pred": pka_pred,
             "formal_charge": formal_charge,
-            "minimized_pdb": str(minimized_pdb),
-            "minimized_sdf": str(minimized_sdf),
-        })
+        }
+        
+        # Add file paths to result
+        if "pdb" in saved_files:
+            result_entry["minimized_pdb"] = saved_files["pdb"]
+        if "sdf" in saved_files:
+            result_entry["minimized_sdf"] = saved_files["sdf"]
+        if "mol2" in saved_files:
+            result_entry["minimized_mol2"] = saved_files["mol2"]
+        
+        results.append(result_entry)
 
     # write a summary file for the UI
     summary_lines = []
@@ -244,6 +309,7 @@ def run_job(
         if r["pka_pred"] is not None:
             summary_lines.append(f"  pKa (ML)   : {r['pka_pred']:.2f}")
         summary_lines.append(f"  Charge     : {r['formal_charge']}")
+        summary_lines.append(f"  Formats    : {', '.join(output_formats)}")
         summary_lines.append("")
     summary_text = "\n".join(summary_lines).strip()
     (out / "summary.txt").write_text(summary_text + "\n")
@@ -251,11 +317,13 @@ def run_job(
     return {"results": results, "summary_text": summary_text, "out_dir": str(out)}
 
 def zip_minimized_pdb_only(out_dir: str, zip_path: str) -> str:
+    """Zip all minimized structure files (PDB, SDF, MOL2)"""
     out = Path(out_dir)
     zp = Path(zip_path)
     with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
-        for p in out.glob("*_min.pdb"):
-            z.write(p, arcname=p.name)
+        for p in out.glob("*_min.*"):
+            if p.suffix.lower() in [".pdb", ".sdf", ".mol2"]:
+                z.write(p, arcname=p.name)
     return str(zp)
 
 def zip_all_outputs(out_dir: str, zip_path: str) -> str:
@@ -266,4 +334,3 @@ def zip_all_outputs(out_dir: str, zip_path: str) -> str:
             if p.is_file():
                 z.write(p, arcname=p.relative_to(out))
     return str(zp)
-
