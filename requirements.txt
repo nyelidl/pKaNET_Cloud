@@ -5,3 +5,4 @@ pkapredict
 numpy
 pandas
 pillow
+openbabel-wheel
