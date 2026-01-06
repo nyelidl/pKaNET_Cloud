@@ -452,31 +452,14 @@ def run_job(
 
     return {"results": results, "summary_text": summary_text, "out_dir": str(out), "format_warnings": format_warnings}
 
-def zip_minimized_structures(
-    out_dir: str,
-    zip_path: str,
-    out_format: str,   # "pdb" or "mol2"
-) -> str:
-    """
-    Zip minimized structure files in the selected format only.
-    """
+def zip_minimized_pdb_only(out_dir: str, zip_path: str) -> str:
+    """Zip all minimized structure files (PDB, SDF, MOL2)"""
     out = Path(out_dir)
     zp = Path(zip_path)
-
-    suffix_map = {
-        "pdb": ".pdb",
-        "mol2": ".mol2",
-    }
-
-    if out_format not in suffix_map:
-        raise ValueError("out_format must be 'pdb' or 'mol2'")
-
-    suffix = suffix_map[out_format]
-
     with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
-        for p in out.glob(f"*_min{suffix}"):
-            z.write(p, arcname=p.name)
-
+        for p in out.glob("*_min.*"):
+            if p.suffix.lower() in [".pdb", ".sdf", ".mol2"]:
+                z.write(p, arcname=p.name)
     return str(zp)
 
 def zip_all_outputs(out_dir: str, zip_path: str) -> str:
