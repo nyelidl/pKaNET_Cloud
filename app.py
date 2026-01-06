@@ -95,14 +95,8 @@ uploaded = None
 
 # Input section
 if input_type == "SMILES":
-    st.markdown(
-        '<div class="sub-header">'
-        'Example: CC(C)CC1=CC=C(C=C1)C(C)C(=O)O'
-        '</div>',
-        unsafe_allow_html=True,
-    )
     smiles_text = st.text_area(
-        "SMILES",
+        "SMILES, example: CC(C)CC1=CC=C(C=C1)C(C)C(=O)O",
         height=120,
         placeholder="Paste a SMILES here:",
     )
