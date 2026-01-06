@@ -386,7 +386,7 @@ if run_btn:
                         
                         # Create descriptive button text based on selected formats
                         if len(output_formats) == 1:
-                            btn_text = f"🧬 Download {output_formats[0]} files (ZIP)"
+                            btn_text = f"🧬 Download minimized structures in {output_formats[0]} files (ZIP)"
                         else:
                             btn_text = f"🧬 Download {' + '.join(output_formats)} files (ZIP)"
                         
