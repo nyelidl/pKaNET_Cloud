@@ -10,6 +10,57 @@ from rdkit.Chem import AllChem
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
 from dimorphite_dl import protonate_smiles
 from pkapredict import load_model, smiles_to_rdkit_descriptors, predict_pKa
+import subprocess
+import shutil
+
+
+# Check if Open Babel is available
+_OBABEL_AVAILABLE = None
+
+def check_obabel():
+    """Check if obabel command is available"""
+    global _OBABEL_AVAILABLE
+    if _OBABEL_AVAILABLE is None:
+        _OBABEL_AVAILABLE = shutil.which("obabel") is not None
+    return _OBABEL_AVAILABLE
+
+
+def convert_pdb_to_mol2_obabel(pdb_path: str, mol2_path: str) -> bool:
+    """
+    Convert PDB to MOL2 using Open Babel
+    
+    Args:
+        pdb_path: Path to input PDB file
+        mol2_path: Path to output MOL2 file
+    
+    Returns:
+        True if conversion successful, False otherwise
+    """
+    if not check_obabel():
+        return False
+    
+    try:
+        # Run obabel conversion
+        result = subprocess.run(
+            ["obabel", pdb_path, "-O", mol2_path],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        # Check if conversion was successful
+        if result.returncode == 0 and Path(mol2_path).exists():
+            return True
+        else:
+            print(f"Open Babel conversion failed: {result.stderr}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print("Open Babel conversion timed out")
+        return False
+    except Exception as e:
+        print(f"Open Babel conversion error: {e}")
+        return False
 
 
 # Load model once (cached in module)
@@ -137,6 +188,7 @@ def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, An
     """
     Save molecule to multiple file formats.
     Always generates SDF for visualization. User-selected formats are also saved.
+    If MOL2 is requested but RDKit doesn't support it, tries to convert from PDB using Open Babel.
     
     Args:
         mol: RDKit molecule object
@@ -148,6 +200,8 @@ def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, An
     """
     saved_files = {}
     warnings = []
+    mol2_requested = "MOL2" in [f.upper() for f in formats]
+    mol2_via_obabel = False
     
     # Always save SDF first (for visualization)
     try:
@@ -176,26 +230,46 @@ def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, An
                 
             elif fmt_upper == "MOL2":
                 file_path = f"{base_path}.mol2"
-                # Check if MolToMol2File is available
-                if not hasattr(Chem, 'MolToMol2File'):
-                    msg = "MOL2 format not available in this RDKit installation. Please use PDB or SDF instead."
-                    warnings.append(msg)
-                    print(f"Warning: {msg}")
-                    continue
-                    
-                try:
-                    Chem.MolToMol2File(mol, file_path)
+                
+                # Try RDKit first
+                if hasattr(Chem, 'MolToMol2File'):
+                    try:
+                        Chem.MolToMol2File(mol, file_path)
+                        saved_files["mol2"] = file_path
+                        continue
+                    except Exception as e:
+                        print(f"RDKit MOL2 failed, will try Open Babel: {e}")
+                
+                # RDKit MOL2 not available, try Open Babel conversion
+                if "pdb" not in saved_files:
+                    # Need to generate PDB first for conversion
+                    pdb_path = f"{base_path}.pdb"
+                    try:
+                        Chem.MolToPDBFile(mol, pdb_path)
+                        saved_files["pdb"] = pdb_path
+                    except Exception as e:
+                        warnings.append(f"Could not generate PDB for MOL2 conversion: {e}")
+                        continue
+                
+                # Try converting PDB to MOL2 with Open Babel
+                pdb_path = saved_files.get("pdb")
+                if pdb_path and convert_pdb_to_mol2_obabel(pdb_path, file_path):
                     saved_files["mol2"] = file_path
-                except Exception as e:
-                    msg = f"MOL2 format not supported in this RDKit build: {str(e)}"
-                    warnings.append(msg)
-                    print(f"Warning: {msg}")
-                    continue
+                    mol2_via_obabel = True
+                else:
+                    if not check_obabel():
+                        warnings.append("MOL2 format not available. Install Open Babel (obabel) to enable MOL2 output.")
+                    else:
+                        warnings.append("MOL2 conversion failed. Using PDB format instead.")
         
         except Exception as e:
             warnings.append(f"Could not save {fmt_upper} format: {e}")
             print(f"Warning: Could not save {fmt_upper} format: {e}")
             continue
+    
+    # Add info message if MOL2 was generated via Open Babel
+    if mol2_via_obabel:
+        warnings.append("ℹ️ MOL2 files generated using Open Babel (converted from PDB)")
     
     return {"files": saved_files, "warnings": warnings}
 
