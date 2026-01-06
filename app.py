@@ -95,7 +95,8 @@ uploaded = None
 
 # Input section
 if input_type == "SMILES":
-    smiles_text = st.text_area("SMILES", height=120, placeholder="Paste a SMILES here (e.g., CC(C)Cc1ccc(cc1)C(C)C(=O)O)")
+st.markdown('<div class="sub-header">Example: CC(C)CC1=CC=C(C=C1)C(C)C(=O)O</div>', unsafe_allow_html=True)
+    smiles_text = st.text_area("SMILES", height=120, placeholder="Paste a SMILES here: ")
 elif input_type == "SMI_FILE":
     uploaded = st.file_uploader("Upload .smi (SMILES [name] per line)", type=["smi", "txt"])
     st.info("📝 Format: `SMILES [optional_name]` per line")
