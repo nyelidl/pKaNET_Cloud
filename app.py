@@ -52,7 +52,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-header">🧪 pKaNET Cloud</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">AI-Based Protonation & 3D Structure Builder</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">AI-Based Protonation & 3D Structure Builder for All</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">This is a part of DFDD project: https://github.com/nyelidl/DFDD</div>', unsafe_allow_html=True)
 
 # Sidebar configuration
 st.sidebar.header("⚙️ Input / Options")
@@ -78,17 +79,8 @@ else:
     st.sidebar.info("ℹ️ 2D visualization not available on this server")
 show_3d = st.sidebar.checkbox("Show 3D structure", value=True)
 
-if show_3d:
-    viz_style = st.sidebar.selectbox(
-        "3D style",
-        ["Stick", "Ball and Stick", "Sphere"],
-        index=1
-    )
-else:
-    viz_style = "Ball and Stick"
-
-viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 600, 50)
-viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 400, 50)
+viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 400, 50)
+viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 200, 50)
 
 smiles_text = None
 uploaded = None
@@ -121,67 +113,8 @@ def draw_molecule_2d(smiles_str, size=(400, 300)):
         return None
 
 # Helper function for 3D visualization
-def create_3dmol_viewer(file_content, width=600, height=400, file_format="sdf", style="Ball and Stick"):
-    """Create py3Dmol viewer HTML with hydrogens visible"""
-    
-    # Define styles based on selection
-    if style == "Stick":
-        style_js = """
-        viewer.setStyle({}, {
-            stick: {
-                radius: 0.15,
-                colorscheme: 'default'
-            }
-        });
-        // Hydrogens slightly thinner
-        viewer.setStyle({elem: 'H'}, {
-            stick: {
-                radius: 0.1,
-                color: 'white'
-            }
-        });
-        """
-    elif style == "Ball and Stick":
-        style_js = """
-        viewer.setStyle({}, {
-            stick: {
-                radius: 0.15,
-                colorscheme: 'default'
-            },
-            sphere: {
-                scale: 0.3,
-                colorscheme: 'default'
-            }
-        });
-        // Hydrogens with smaller spheres
-        viewer.setStyle({elem: 'H'}, {
-            stick: {
-                radius: 0.1,
-                color: 'white'
-            },
-            sphere: {
-                scale: 0.2,
-                color: 'white'
-            }
-        });
-        """
-    else:  # Sphere
-        style_js = """
-        viewer.setStyle({}, {
-            sphere: {
-                scale: 0.4,
-                colorscheme: 'default'
-            }
-        });
-        // Hydrogens visible
-        viewer.setStyle({elem: 'H'}, {
-            sphere: {
-                scale: 0.25,
-                color: 'white'
-            }
-        });
-        """
-    
+def create_3dmol_viewer(sdf_content, width=400, height=300):
+    """Create py3Dmol viewer HTML - stick style with radius 0.2"""
     html_template = f"""
     <div id="container" style="width: {width}px; height: {height}px; position: relative;"></div>
     <script src="https://3Dmol.csb.pitt.edu/build/3Dmol-min.js"></script>
@@ -190,17 +123,12 @@ def create_3dmol_viewer(file_content, width=600, height=400, file_format="sdf", 
             backgroundColor: 'white'
         }});
         
-        let fileData = `{file_content}`;
+        let sdfData = `{sdf_content}`;
         
-        viewer.addModel(fileData, "{file_format}");
-        
-        {style_js}
-        
+        viewer.addModel(sdfData, "sdf");
+        viewer.setStyle({{}}, {{stick: {{radius: 0.2}}}});
         viewer.zoomTo();
         viewer.render();
-        
-        // Add rotation controls
-        viewer.spin(false);
     </script>
     """
     return html_template
@@ -208,7 +136,7 @@ def create_3dmol_viewer(file_content, width=600, height=400, file_format="sdf", 
 run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
 
 
-def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height, viz_style="Ball and Stick"):
+def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height):
     """Display results for a single ligand"""
     
     # Molecular information
@@ -251,40 +179,33 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
                     st.info("2D visualization requires additional system libraries")
                     st.code(result["ph_smiles"], language=None)
         
-        # 3D Structure - Always use SDF for best hydrogen display
+        # 3D Structure - Always use SDF
         if show_3d:
             target_col = viz_col2 if viz_col2 else viz_col1
             with target_col:
-                st.markdown("**3D Structure (Minimized)**")
+                st.markdown("**🧊 3D Minimized Structure**")
                 
-                # Always prefer SDF for 3D visualization (best for showing hydrogens)
-                viz_file = None
-                file_format = "sdf"
-                
+                # Always use SDF for 3D visualization
                 if "minimized_sdf" in result and result["minimized_sdf"]:
-                    viz_file = Path(result["minimized_sdf"])
-                elif "minimized_pdb" in result and result["minimized_pdb"]:
-                    # Fallback to PDB if SDF not available
-                    viz_file = Path(result["minimized_pdb"])
-                    file_format = "pdb"
-                elif "minimized_mol2" in result and result["minimized_mol2"]:
-                    # Last resort: MOL2
-                    viz_file = Path(result["minimized_mol2"])
-                    file_format = "mol2"
-                
-                if viz_file and viz_file.exists():
-                    with open(viz_file, "r") as f:
-                        file_content = f.read()
-                    
-                    # Escape special characters for JavaScript
-                    file_content = file_content.replace('`', '\\`').replace('${', '\\${')
-                    
-                    viewer_html = create_3dmol_viewer(file_content, viewer_width, viewer_height, file_format, viz_style)
-                    components.html(viewer_html, height=viewer_height + 50, scrolling=False)
-                    
-                    st.caption(f"🖱️ Click and drag to rotate • Scroll to zoom")
+                    sdf_path = Path(result["minimized_sdf"])
+                    if sdf_path.exists():
+                        try:
+                            with open(sdf_path, "r") as f:
+                                sdf_data = f.read()
+                            
+                            # Escape special characters for JavaScript
+                            sdf_data = sdf_data.replace('`', '\\`').replace('${', '\\${')
+                            
+                            viewer_html = create_3dmol_viewer(sdf_data, viewer_width, viewer_height)
+                            components.html(viewer_html, height=viewer_height + 50, scrolling=False)
+                            
+                            st.caption("🖱️ Click and drag to rotate • Scroll to zoom")
+                        except Exception as e:
+                            st.warning(f"⚠️ 3D visualization failed: {e}")
+                    else:
+                        st.warning("3D structure file not found")
                 else:
-                    st.warning("3D structure file not found")
+                    st.warning("SDF file not available for 3D visualization")
     
     # File information
     with st.expander("📁 Output Files"):
@@ -348,14 +269,33 @@ if run_btn:
                         
                         for tab, result in zip(tabs, results):
                             with tab:
-                                display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height, viz_style)
+                                display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
                     else:
                         # Single ligand - use columns
                         result = results[0]
-                        display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height, viz_style)
+                        display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
                     
                     # Download section
                     st.header("💾 Downloads")
+                    
+                    # Check if log file exists (for SMI_FILE input)
+                    log_file = out_dir / "processing.log"
+                    has_log = log_file.exists()
+                    
+                    if has_log:
+                        # Show log file download first for SMI_FILE input
+                        st.subheader("📋 Processing Log")
+                        st.download_button(
+                            "📄 Download Processing Log (.log)",
+                            data=log_file.read_bytes(),
+                            file_name="pkanet_processing.log",
+                            mime="text/plain",
+                            use_container_width=True,
+                            help="Tab-separated file with: Name | pH-adjusted SMILES | Charge | pKa"
+                        )
+                        st.markdown("---")
+                    
+                    st.subheader("📦 Structure Files")
                     col1, col2 = st.columns(2)
                     
                     with col1:
@@ -402,10 +342,12 @@ st.sidebar.markdown("### 📚 Citation")
 st.sidebar.markdown("""
 If you use this tool, please cite:
 - DFDD project: Hengphasatporn K et al., JCIM (2026)
+GitHub: https://github.com/nyelidl/DFDD
 - Dimorphite-DL: Ropp PJ et al., J Cheminform (2019)
 
-We gratefully acknowledge Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski for developing pKaPredict, as well as for the study “Machine Learning Meets pKa”, which provided valuable context and inspiration for the pKaNET-Cloud module used in this work.
-
+We thank **Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski**
+for developing **pKaPredict** and the study *“Machine Learning Meets pKa”*,
+which inspired **pKaNET-Cloud**.
 
 """)
 
