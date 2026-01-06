@@ -374,7 +374,7 @@ st.sidebar.info("""
 st.sidebar.markdown("### 📚 Citation")
 st.sidebar.markdown("""
 If you use this tool, please cite:
-- DFDD project: Hengphasatporn K et al., JCIM (2026)
+- DFDD project: Hengphasatporn K., Duan L., Harada R., Shigeta Y. JCIM (2026)
 - Dimorphite-DL: Ropp PJ et al., J Cheminform (2019)
 
 We thank **Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski**
