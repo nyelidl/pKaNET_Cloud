@@ -411,6 +411,11 @@ def run_job(
         save_result = save_molecule_files(mol_min, base_file_path, formats_to_save)
         saved_files = save_result["files"]
         
+        # Save 2D structure as PNG for visualization/download
+        png_path = str(out / f"{base_name}{suffix}_2D.png")
+        if save_2d_structure_image(ph_smiles, png_path):
+            saved_files["png_2d"] = png_path
+        
         # Collect unique warnings
         for warning in save_result["warnings"]:
             if warning not in format_warnings:
