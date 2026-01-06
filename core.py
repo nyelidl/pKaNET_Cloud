@@ -133,7 +133,7 @@ def generate_RS_variants(base_smiles: str, base_name: str):
     return variants or [{"name": base_name, "stereo": None, "base_smiles": Chem.MolToSmiles(isomers[0], isomericSmiles=True)}]
 
 
-def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, str]:
+def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, Any]:
     """
     Save molecule to multiple file formats.
     Always generates SDF for visualization. User-selected formats are also saved.
@@ -144,9 +144,10 @@ def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, st
         formats: List of formats to save (e.g., ["PDB", "MOL2"])
     
     Returns:
-        Dictionary mapping format to file path
+        Dictionary with 'files' (mapping format to file path) and 'warnings' (list of warnings)
     """
     saved_files = {}
+    warnings = []
     
     # Always save SDF first (for visualization)
     try:
@@ -156,6 +157,7 @@ def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, st
         writer.close()
         saved_files["sdf"] = sdf_path
     except Exception as e:
+        warnings.append(f"Could not save SDF format: {e}")
         print(f"Warning: Could not save SDF format: {e}")
     
     # Now save user-requested formats
@@ -174,19 +176,28 @@ def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, st
                 
             elif fmt_upper == "MOL2":
                 file_path = f"{base_path}.mol2"
+                # Check if MolToMol2File is available
+                if not hasattr(Chem, 'MolToMol2File'):
+                    msg = "MOL2 format not available in this RDKit installation. Please use PDB or SDF instead."
+                    warnings.append(msg)
+                    print(f"Warning: {msg}")
+                    continue
+                    
                 try:
                     Chem.MolToMol2File(mol, file_path)
                     saved_files["mol2"] = file_path
-                except (AttributeError, RuntimeError) as e:
-                    print(f"Warning: MOL2 format not available in this RDKit build: {e}")
-                    # Don't fall back to SDF - just skip MOL2
+                except Exception as e:
+                    msg = f"MOL2 format not supported in this RDKit build: {str(e)}"
+                    warnings.append(msg)
+                    print(f"Warning: {msg}")
                     continue
         
         except Exception as e:
+            warnings.append(f"Could not save {fmt_upper} format: {e}")
             print(f"Warning: Could not save {fmt_upper} format: {e}")
             continue
     
-    return saved_files
+    return {"files": saved_files, "warnings": warnings}
 
 
 def run_job(
@@ -271,6 +282,8 @@ def run_job(
             ligands.append({"name": lig["name"], "stereo": None, "base_smiles": lig["base_smiles"]})
 
     results = []
+    format_warnings = []  # Collect warnings across all molecules
+    
     for lig in ligands:
         base_name = lig["name"]
         stereo = lig.get("stereo")
@@ -289,7 +302,13 @@ def run_job(
 
         # Save molecule in requested formats (SDF always included)
         base_file_path = str(out / f"{base_name}{suffix}_min")
-        saved_files = save_molecule_files(mol_min, base_file_path, formats_to_save)
+        save_result = save_molecule_files(mol_min, base_file_path, formats_to_save)
+        saved_files = save_result["files"]
+        
+        # Collect unique warnings
+        for warning in save_result["warnings"]:
+            if warning not in format_warnings:
+                format_warnings.append(warning)
 
         result_entry = {
             "name": pretty_name,
@@ -357,7 +376,7 @@ def run_job(
         
         (out / "processing.log").write_text("\n".join(log_lines) + "\n")
 
-    return {"results": results, "summary_text": summary_text, "out_dir": str(out)}
+    return {"results": results, "summary_text": summary_text, "out_dir": str(out), "format_warnings": format_warnings}
 
 def zip_minimized_pdb_only(out_dir: str, zip_path: str) -> str:
     """Zip all minimized structure files (PDB, SDF, MOL2)"""
