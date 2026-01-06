@@ -1,11 +1,13 @@
 # 🧪 pKaNET Cloud — AI-Based Protonation Tool
-### *Fast, lightweight pKa prediction & protonation directly in Google Colab*
+### *Fast, lightweight pKa prediction & protonation directly in Google Colab & Webserver*
 
 This notebook provides a **cloud-ready implementation** of a **pKaNET-style machine-learning model** for estimating pKa values and generating **pH-dependent protonation states**.
 
 Designed for simplicity, portability, and reproducibility — **no docking, no MD, no enhanced sampling**.
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/16oz3jR6gWOzaSaJImlVflPkgT8eTcfTi?usp=sharing)
+
+[![Open In Web](https://pkanetcloud.streamlit.app/)
 
 ![pKaNET Workflow](https://github.com/nyelidl/pKaNET_Cloud/blob/main/Pka_WF.png)
 
