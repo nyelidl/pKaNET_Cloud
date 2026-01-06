@@ -52,7 +52,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-header">🧪 pKaNET Cloud</div>', unsafe_allow_html=True)
-#st.markdown('<div class="sub-header">AI-Based Protonation & 3D Structure Builder</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="sub-header">'
     'Machine-Learning–Driven Protonation & pH-Aware 3D Structure Generation<br>'
@@ -63,7 +62,6 @@ st.markdown(
     '</div>',
     unsafe_allow_html=True
 )
-
 
 st.markdown(
     '<div class="sub-header">'
@@ -250,20 +248,28 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
                 else:
                     st.warning("SDF file not available for 3D visualization")
     
-    # File information
+    # File information - show what was actually generated
     with st.expander("📁 Output Files"):
         available_files = []
-        # Only show user-selected formats (not SDF, which is for visualization only)
+        
+        # Check what files actually exist and display them
         if "minimized_pdb" in result and result["minimized_pdb"]:
-            if "PDB" in output_formats:
-                available_files.append(f"- **PDB:** `{Path(result['minimized_pdb']).name}`")
+            pdb_path = Path(result["minimized_pdb"])
+            if pdb_path.exists():
+                available_files.append(f"- **PDB:** `{pdb_path.name}`")
+        
         if "minimized_mol2" in result and result["minimized_mol2"]:
-            if "MOL2" in output_formats:
-                available_files.append(f"- **MOL2:** `{Path(result['minimized_mol2']).name}`")
+            mol2_path = Path(result["minimized_mol2"])
+            if mol2_path.exists():
+                available_files.append(f"- **MOL2:** `{mol2_path.name}`")
+        
+        if "minimized_sdf" in result and result["minimized_sdf"]:
+            sdf_path = Path(result["minimized_sdf"])
+            if sdf_path.exists():
+                available_files.append(f"- **SDF:** `{sdf_path.name}` (for visualization)")
         
         if available_files:
             st.markdown("\n".join(available_files))
-            st.info("ℹ️ SDF files are generated automatically for 3D visualization")
         else:
             st.warning("No output files generated")
 
@@ -295,7 +301,7 @@ if run_btn:
                         output_name=output_name,
                         out_dir=str(out_dir),
                         output_formats=output_formats,
-                        enumerate_stereoisomers=enumerate_stereoisomers,  # Pass the new parameter
+                        enumerate_stereoisomers=enumerate_stereoisomers,
                     )
 
                     st.success("✅ Analysis complete!")
@@ -359,13 +365,13 @@ if run_btn:
                         )
                     
                     with col2:
-                        # ZIP only minimized PDB
-                        zip_pdb = tmp / "minimized_pdb_only.zip"
+                        # ZIP only minimized structures
+                        zip_pdb = tmp / "minimized_structures.zip"
                         zip_minimized_pdb_only(str(out_dir), str(zip_pdb))
                         st.download_button(
-                            "🧬 Download minimized PDB only (ZIP)",
+                            "🧬 Download minimized structures (ZIP)",
                             data=zip_pdb.read_bytes(),
-                            file_name="minimized_pdb_outputs.zip",
+                            file_name="minimized_structures.zip",
                             mime="application/zip",
                             use_container_width=True
                         )
@@ -405,4 +411,4 @@ st.markdown("""
     <p>🧬 Developed for pH-dependent ligand preparation | 
     For questions: <a href='mailto:kowith@ccs.tsukuba.ac.jp'>kowith@ccs.tsukuba.ac.jp</a></p>
 </div>
-""", unsafe_allow_html=True)
+""", unsafe_allow_html=T
