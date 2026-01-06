@@ -269,7 +269,7 @@ def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, An
     
     # Add info message if MOL2 was generated via Open Babel
     if mol2_via_obabel:
-        warnings.append("ℹ️ MOL2 file(s) have been successfully generated.")
+        warnings.append("ℹ️ MOL2 files generated using Open Babel (converted from PDB)")
     
     return {"files": saved_files, "warnings": warnings}
 
@@ -452,17 +452,40 @@ def run_job(
 
     return {"results": results, "summary_text": summary_text, "out_dir": str(out), "format_warnings": format_warnings}
 
-def zip_minimized_pdb_only(out_dir: str, zip_path: str) -> str:
-    """Zip all minimized structure files (PDB, SDF, MOL2)"""
+def zip_minimized_structures(out_dir: str, zip_path: str, selected_formats: List[str]) -> str:
+    """
+    Zip only user-selected structure formats (PDB and/or MOL2), excluding SDF
+    
+    Args:
+        out_dir: Output directory containing structure files
+        zip_path: Path for output zip file
+        selected_formats: List of user-selected formats (e.g., ["PDB", "MOL2"])
+    
+    Returns:
+        Path to created zip file
+    """
     out = Path(out_dir)
     zp = Path(zip_path)
+    
+    # Convert to lowercase for comparison
+    formats_lower = [fmt.lower() for fmt in selected_formats]
+    
     with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
         for p in out.glob("*_min.*"):
-            if p.suffix.lower() in [".pdb", ".sdf", ".mol2"]:
+            suffix = p.suffix.lower()
+            # Only include user-selected formats, exclude .sdf
+            if suffix == ".pdb" and "pdb" in formats_lower:
                 z.write(p, arcname=p.name)
+            elif suffix == ".mol2" and "mol2" in formats_lower:
+                z.write(p, arcname=p.name)
+    
     return str(zp)
 
+
 def zip_all_outputs(out_dir: str, zip_path: str) -> str:
+    """
+    Zip all output files including structures, logs, summaries, and 2D structure PNGs
+    """
     out = Path(out_dir)
     zp = Path(zip_path)
     with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
