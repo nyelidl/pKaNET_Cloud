@@ -184,6 +184,38 @@ def generate_RS_variants(base_smiles: str, base_name: str):
     return variants or [{"name": base_name, "stereo": None, "base_smiles": Chem.MolToSmiles(isomers[0], isomericSmiles=True)}]
 
 
+def save_2d_structure_image(smiles: str, output_path: str, size=(800, 600)) -> bool:
+    """
+    Save 2D structure as PNG image
+    
+    Args:
+        smiles: SMILES string
+        output_path: Path to save PNG file
+        size: Image size (width, height)
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        from rdkit.Chem import Draw
+        
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return False
+        
+        AllChem.Compute2DCoords(mol)
+        img = Draw.MolToImage(mol, size=size)
+        img.save(output_path)
+        return True
+        
+    except (ImportError, OSError, AttributeError) as e:
+        print(f"Warning: Could not generate 2D structure image: {e}")
+        return False
+    except Exception as e:
+        print(f"Warning: 2D structure image generation failed: {e}")
+        return False
+
+
 def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, Any]:
     """
     Save molecule to multiple file formats.
