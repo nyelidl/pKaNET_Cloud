@@ -268,10 +268,10 @@ def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, An
             continue
     
     # Add info message if MOL2 was generated via Open Babel
-    if mol2_via_obabel:
-        warnings.append("ℹ️ MOL2 files generated using Open Babel")
+    #if mol2_via_obabel:
+    #    warnings.append("ℹ️ MOL2 files generated using Open Babel")
     
-    return {"files": saved_files, "warnings": warnings}
+    #return {"files": saved_files, "warnings": warnings}
 
 
 def run_job(
