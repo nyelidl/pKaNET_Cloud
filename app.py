@@ -1,428 +1,532 @@
-import streamlit as st
-import tempfile
+# core.py
+from __future__ import annotations
 from pathlib import Path
-from core import run_job, zip_all_outputs, zip_minimized_pdb_only
-import streamlit.components.v1 as components
+import os
+import zipfile
+from typing import Optional, Dict, Any, List, Tuple
+
 from rdkit import Chem
 from rdkit.Chem import AllChem
-import io
-
-# Fix for RDKit Draw on headless servers
-try:
-    from rdkit.Chem import Draw
-    DRAW_AVAILABLE = True
-except (ImportError, OSError) as e:
-    # RDKit Draw not available (missing X11 libraries on headless server)
-    DRAW_AVAILABLE = False
-    print(f"Warning: RDKit Draw not available: {e}")
-    # Create a fallback Draw module
-    class DrawFallback:
-        @staticmethod
-        def MolToImage(*args, **kwargs):
-            return None
-    Draw = DrawFallback()
-
-st.set_page_config(page_title="pKaNET Cloud", layout="wide", page_icon="🧪")
-
-# Custom CSS for better styling
-st.markdown("""
-    <style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 0.5rem;
-    }
-    .sub-header {
-        text-align: center;
-        color: #666;
-        margin-bottom: 2rem;
-    }
-    .result-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
-    }
-    .stDownloadButton button {
-        width: 100%;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-st.markdown('<div class="main-header">🧪 pKaNET Cloud</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="sub-header">'
-    'Machine-Learning–Driven Protonation & pH-Aware 3D Structure Generation<br>'
-    '<span style="font-size:0.9em; font-weight:normal;">'
-    'Instant pH-aware 3D structures for docking, virtual screening, and education – '
-    'with automatic R/S stereoisomer enumeration.'
-    '</span>'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    '<div class="sub-header">'
-    'This is part of the <a href="https://github.com/nyelidl/DFDD" '
-    'target="_blank"><strong>DFDD Project</strong></a>.'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-# Sidebar configuration
-st.sidebar.header("⚙️ Input / Options")
-input_type = st.sidebar.selectbox("Input type", ["SMILES", "SMI_FILE", "FILE"])
-target_pH = st.sidebar.slider("Target pH", 2.0, 12.0, 7.0, 0.1)
-output_name = st.sidebar.text_input("Output name (for single SMILES/FILE)", value="ligand")
-
-# Add stereoisomer enumeration option
-st.sidebar.header("🧬 Stereochemistry")
-enumerate_stereoisomers = st.sidebar.checkbox(
-    "Enumerate R/S stereoisomers",
-    value=True,
-    help="Automatically generate all possible R/S stereoisomers for undefined chiral centers"
-)
-
-st.sidebar.header("📄 Output Format")
-output_formats = st.sidebar.multiselect(
-    "Select output formats",
-    ["PDB", "MOL2"],
-    default=["PDB"],
-    help="SDF is always generated for 3D visualization"
-)
-if not output_formats:
-    st.sidebar.warning("⚠️ Please select at least one output format")
-
-# Add visualization options
-st.sidebar.header("🎨 Visualization Options")
-if DRAW_AVAILABLE:
-    show_2d = st.sidebar.checkbox("Show 2D structure", value=True)
-else:
-    show_2d = False
-    st.sidebar.info("ℹ️ 2D visualization not available on this server")
-show_3d = st.sidebar.checkbox("Show 3D structure", value=True)
-
-viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 300, 50)
-viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 300, 50)
-
-smiles_text = None
-uploaded = None
-
-# Input section
-if input_type == "SMILES":
-    smiles_text = st.text_area(
-        "SMILES\nexample: CC(C)CC1=CC=C(C=C1)C(C)C(=O)O",
-        height=120,
-        placeholder="Paste a SMILES here:",
-    )
-
-elif input_type == "SMI_FILE":
-    uploaded = st.file_uploader(
-        "Upload .smi (SMILES [name] per line)",
-        type=["smi", "txt"],
-    )
-    st.info("📝 Format: `SMILES [optional_name]` per line")
-
-else:
-    uploaded = st.file_uploader(
-        "Upload ligand file",
-        type=["pdb", "mol2", "sdf"],
-    )
-    st.info("📝 Supported formats: PDB, MOL2, SDF")
+from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
+from dimorphite_dl import protonate_smiles
+from pkapredict import load_model, smiles_to_rdkit_descriptors, predict_pKa
+import subprocess
+import shutil
 
 
-# Helper function for 2D visualization
-def draw_molecule_2d(smiles_str, size=(400, 300)):
-    """Generate 2D molecular structure image"""
-    if not DRAW_AVAILABLE:
-        return None
+# Check if Open Babel is available
+_OBABEL_AVAILABLE = None
+
+def check_obabel():
+    """Check if obabel command is available"""
+    global _OBABEL_AVAILABLE
+    if _OBABEL_AVAILABLE is None:
+        _OBABEL_AVAILABLE = shutil.which("obabel") is not None
+    return _OBABEL_AVAILABLE
+
+
+def convert_pdb_to_mol2_obabel(pdb_path: str, mol2_path: str) -> bool:
+    """
+    Convert PDB to MOL2 using Open Babel
+    
+    Args:
+        pdb_path: Path to input PDB file
+        mol2_path: Path to output MOL2 file
+    
+    Returns:
+        True if conversion successful, False otherwise
+    """
+    if not check_obabel():
+        return False
     
     try:
-        mol = Chem.MolFromSmiles(smiles_str)
+        # Run obabel conversion
+        result = subprocess.run(
+            ["obabel", pdb_path, "-O", mol2_path],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        # Check if conversion was successful
+        if result.returncode == 0 and Path(mol2_path).exists():
+            return True
+        else:
+            print(f"Open Babel conversion failed: {result.stderr}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print("Open Babel conversion timed out")
+        return False
+    except Exception as e:
+        print(f"Open Babel conversion error: {e}")
+        return False
+
+
+# Load model once (cached in module)
+_PKANET_MODEL = None
+
+def get_model():
+    global _PKANET_MODEL
+    if _PKANET_MODEL is None:
+        _PKANET_MODEL = load_model()
+    return _PKANET_MODEL
+
+
+def predict_pka_pkanet(smiles: str) -> float:
+    smiles = smiles.strip()
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError("RDKit could not parse SMILES for pKa prediction.")
+    try:
+        desc = smiles_to_rdkit_descriptors([smiles])
+    except TypeError:
+        desc = smiles_to_rdkit_descriptors([smiles], descriptor_names=None)
+    return float(predict_pKa(get_model(), desc)[0])
+
+def ph_adjust_smiles_dimorphite(smiles_str: str, ph: float):
+    prot_list = protonate_smiles(smiles_str, ph_min=ph, ph_max=ph, max_variants=1)
+    if not prot_list:
+        raise ValueError("Dimorphite-DL returned no protonation state.")
+    ph_smiles = prot_list[0]
+    mol = Chem.MolFromSmiles(ph_smiles)
+    if mol is None:
+        raise ValueError("RDKit could not parse Dimorphite-DL SMILES.")
+    q = Chem.GetFormalCharge(mol)
+    return ph_smiles, q
+
+def build_minimized_3d(smiles: str):
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError("RDKit could not parse SMILES for 3D build.")
+    mol = Chem.AddHs(mol)
+
+    code = -1
+    try:
+        try:
+            params = AllChem.ETKDGv3()
+        except AttributeError:
+            params = AllChem.ETKDG()
+        params.randomSeed = 0xF00D
+        code = AllChem.EmbedMolecule(mol, params)
+    except Exception:
+        code = AllChem.EmbedMolecule(mol, randomSeed=0xF00D, maxAttempts=2000)
+
+    if code != 0 or mol.GetNumConformers() == 0:
+        code2 = AllChem.EmbedMolecule(mol, useRandomCoords=True, randomSeed=0xF00D, maxAttempts=2000)
+        if code2 != 0 or mol.GetNumConformers() == 0:
+            raise ValueError("3D embedding failed (no conformer).")
+
+    try:
+        if AllChem.MMFFHasAllMoleculeParams(mol):
+            AllChem.MMFFOptimizeMolecule(mol, maxIters=500)
+        else:
+            AllChem.UFFOptimizeMolecule(mol, maxIters=500)
+    except Exception:
+        pass
+    return mol
+
+def parse_smi_lines(text: str):
+    records = []
+    idx = 1
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        smi = parts[0]
+        name = parts[1] if len(parts) > 1 else f"mol_{idx:03d}"
+        records.append((smi, name))
+        idx += 1
+    return records
+
+def generate_RS_variants(base_smiles: str, base_name: str):
+    mol = Chem.MolFromSmiles(base_smiles)
+    if mol is None:
+        return [{"name": base_name, "stereo": None, "base_smiles": base_smiles}]
+
+    opts = StereoEnumerationOptions(onlyUnassigned=False)
+    isomers = list(EnumerateStereoisomers(mol, options=opts))
+
+    if len(isomers) == 1:
+        iso_smiles = Chem.MolToSmiles(isomers[0], isomericSmiles=True)
+        return [{"name": base_name, "stereo": None, "base_smiles": iso_smiles}]
+
+    iso0 = isomers[0]
+    Chem.AssignStereochemistry(iso0, force=True, cleanIt=True)
+    centers0 = Chem.FindMolChiralCenters(iso0, includeUnassigned=False)
+    if not centers0:
+        iso_smiles = Chem.MolToSmiles(isomers[0], isomericSmiles=True)
+        return [{"name": base_name, "stereo": None, "base_smiles": iso_smiles}]
+
+    target_idx = centers0[0][0]
+    variants = []
+    used = set()
+
+    for iso in isomers:
+        Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
+        centers = Chem.FindMolChiralCenters(iso, includeUnassigned=False)
+        label_here = None
+        for idx, label in centers:
+            if idx == target_idx and label in ("R", "S"):
+                label_here = label
+                break
+        if label_here and label_here not in used:
+            used.add(label_here)
+            variants.append({
+                "name": base_name,
+                "stereo": label_here,
+                "base_smiles": Chem.MolToSmiles(iso, isomericSmiles=True)
+            })
+        if used == {"R", "S"}:
+            break
+
+    return variants or [{"name": base_name, "stereo": None, "base_smiles": Chem.MolToSmiles(isomers[0], isomericSmiles=True)}]
+
+
+def save_2d_structure_image(smiles: str, output_path: str, size=(800, 600)) -> bool:
+    """
+    Save 2D structure as PNG image
+    
+    Args:
+        smiles: SMILES string
+        output_path: Path to save PNG file
+        size: Image size (width, height)
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        from rdkit.Chem import Draw
+        
+        mol = Chem.MolFromSmiles(smiles)
         if mol is None:
-            return None
+            return False
+        
         AllChem.Compute2DCoords(mol)
         img = Draw.MolToImage(mol, size=size)
-        return img
+        img.save(output_path)
+        return True
+        
+    except (ImportError, OSError, AttributeError) as e:
+        print(f"Warning: Could not generate 2D structure image: {e}")
+        return False
     except Exception as e:
-        st.warning(f"Could not generate 2D structure: {e}")
-        return None
+        print(f"Warning: 2D structure image generation failed: {e}")
+        return False
 
-# Helper function for 3D visualization
-def create_3dmol_viewer(sdf_content, width=400, height=300):
-    """Create py3Dmol viewer HTML - stick style with radius 0.2"""
-    html_template = f"""
-    <div id="container" style="width: {width}px; height: {height}px; position: relative;"></div>
-    <script src="https://3Dmol.csb.pitt.edu/build/3Dmol-min.js"></script>
-    <script>
-        let viewer = $3Dmol.createViewer(document.getElementById('container'), {{
-            backgroundColor: 'white'
-        }});
-        
-        let sdfData = `{sdf_content}`;
-        
-        viewer.addModel(sdfData, "sdf");
-        viewer.setStyle({{}}, {{stick: {{radius: 0.2}}}});
-        viewer.zoomTo();
-        viewer.render();
-    </script>
+
+def save_molecule_files(mol, base_path: str, formats: List[str]) -> Dict[str, Any]:
     """
-    return html_template
-
-run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
-
-
-def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height):
-    """Display results for a single ligand"""
+    Save molecule to multiple file formats.
+    Always generates SDF for visualization. User-selected formats are also saved.
+    If MOL2 is requested but RDKit doesn't support it, tries to convert from PDB using Open Babel.
     
-    # Molecular information
-    st.subheader("🔬 Molecular Information")
+    Args:
+        mol: RDKit molecule object
+        base_path: Base file path without extension
+        formats: List of formats to save (e.g., ["PDB", "MOL2"])
     
-    info_col1, info_col2 = st.columns(2)
+    Returns:
+        Dictionary with 'files' (mapping format to file path) and 'warnings' (list of warnings)
+    """
+    saved_files = {}
+    warnings = []
+    mol2_requested = "MOL2" in [f.upper() for f in formats]
+    mol2_via_obabel = False
     
-    with info_col1:
-        st.markdown(f"**Name:** `{result['name']}`")
-        st.markdown(f"**Base SMILES:** `{result['base_smiles']}`")
-        st.markdown(f"**pH-adjusted SMILES:** `{result['ph_smiles']}`")
+    # Always save SDF first (for visualization)
+    try:
+        sdf_path = f"{base_path}.sdf"
+        writer = Chem.SDWriter(sdf_path)
+        writer.write(mol)
+        writer.close()
+        saved_files["sdf"] = sdf_path
+    except Exception as e:
+        warnings.append(f"Could not save SDF format: {e}")
+        print(f"Warning: Could not save SDF format: {e}")
     
-    with info_col2:
-        if result["pka_pred"] is not None:
-            st.markdown(f"**Predicted pKa:** `{result['pka_pred']:.2f}`")
-        st.markdown(f"**Formal Charge:** `{result['formal_charge']}`")
-        st.markdown(f"**Target pH:** `{target_pH}`")
-        # Show stereoisomer info if available
-        if "stereoisomer_id" in result:
-            st.markdown(f"**Stereoisomer:** `{result['stereoisomer_id']}`")
-    
-    # Visualization section
-    if show_2d or show_3d:
-        st.subheader("🎨 Structure Visualization")
+    # Now save user-requested formats
+    for fmt in formats:
+        fmt_upper = fmt.upper()
         
-        if show_2d and show_3d:
-            viz_col1, viz_col2 = st.columns(2)
-        else:
-            viz_col1 = st.container()
-            viz_col2 = None
-        
-        # 2D Structure
-        if show_2d:
-            with viz_col1:
-                st.markdown("**2D Structure (pH-adjusted)**")
-                if DRAW_AVAILABLE:
-                    img_2d = draw_molecule_2d(result["ph_smiles"], size=(400, 300))
-                    if img_2d:
-                        st.image(img_2d, use_container_width=True)
-                    else:
-                        st.warning("Could not generate 2D structure")
-                else:
-                    st.info("2D visualization requires additional system libraries")
-                    st.code(result["ph_smiles"], language=None)
-        
-        # 3D Structure - Always use SDF
-        if show_3d:
-            target_col = viz_col2 if viz_col2 else viz_col1
-            with target_col:
-                st.markdown("**🧊 3D Minimized Structure**")
-                
-                # Always use SDF for 3D visualization
-                if "minimized_sdf" in result and result["minimized_sdf"]:
-                    sdf_path = Path(result["minimized_sdf"])
-                    if sdf_path.exists():
-                        try:
-                            with open(sdf_path, "r") as f:
-                                sdf_data = f.read()
-                            
-                            # Escape special characters for JavaScript
-                            sdf_data = sdf_data.replace('`', '\\`').replace('${', '\\${')
-                            
-                            viewer_html = create_3dmol_viewer(sdf_data, viewer_width, viewer_height)
-                            components.html(viewer_html, height=viewer_height + 50, scrolling=False)
-                            
-                            st.caption("🖱️ Click and drag to rotate • Scroll to zoom")
-                        except Exception as e:
-                            st.warning(f"⚠️ 3D visualization failed: {e}")
-                    else:
-                        st.warning("3D structure file not found")
-                else:
-                    st.warning("SDF file not available for 3D visualization")
-    
-    # File information - show what was actually generated
-    with st.expander("📁 Output Files"):
-        available_files = []
-        
-        # Check what files actually exist and display them
-        if "minimized_pdb" in result and result["minimized_pdb"]:
-            pdb_path = Path(result["minimized_pdb"])
-            if pdb_path.exists():
-                available_files.append(f"- **PDB:** `{pdb_path.name}`")
-        
-        if "minimized_mol2" in result and result["minimized_mol2"]:
-            mol2_path = Path(result["minimized_mol2"])
-            if mol2_path.exists():
-                available_files.append(f"- **MOL2:** `{mol2_path.name}`")
-        
-        if "minimized_sdf" in result and result["minimized_sdf"]:
-            sdf_path = Path(result["minimized_sdf"])
-            if sdf_path.exists():
-                available_files.append(f"- **SDF:** `{sdf_path.name}` (for visualization)")
-        
-        if available_files:
-            st.markdown("\n".join(available_files))
-        else:
-            st.warning("No output files generated")
-
-
-if run_btn:
-    # Validation
-    if input_type == "SMILES" and not smiles_text:
-        st.error("⚠️ Please enter a SMILES string")
-    elif input_type in ["SMI_FILE", "FILE"] and not uploaded:
-        st.error("⚠️ Please upload a file")
-    elif not output_formats:
-        st.error("⚠️ Please select at least one output format")
-    else:
+        # Skip SDF if already saved
+        if fmt_upper == "SDF":
+            continue
+            
         try:
-            with st.spinner("🔬 Running pKa prediction and 3D generation..."):
-                with tempfile.TemporaryDirectory() as tmp:
-                    tmp = Path(tmp)
-
-                    uploaded_bytes = uploaded.read() if uploaded else None
-                    uploaded_name = uploaded.name if uploaded else None
-
-                    out_dir = tmp / "out"
-                    out = run_job(
-                        input_type=input_type,
-                        smiles_text=smiles_text,
-                        uploaded_bytes=uploaded_bytes,
-                        uploaded_name=uploaded_name,
-                        target_pH=target_pH,
-                        output_name=output_name,
-                        out_dir=str(out_dir),
-                        output_formats=output_formats,
-                        enumerate_stereoisomers=enumerate_stereoisomers,
-                    )
-
-                    st.success("✅ Analysis complete!")
-                    
-                    # Show format warnings if any
-                    if "format_warnings" in out and out["format_warnings"]:
-                        info_warnings = [w for w in out["format_warnings"] if w.startswith("ℹ️")]
-                        error_warnings = [w for w in out["format_warnings"] if not w.startswith("ℹ️")]
-                        
-                        if error_warnings:
-                            with st.expander("⚠️ Format Warnings", expanded=False):
-                                for warning in error_warnings:
-                                    st.warning(warning)
-                        
-                        if info_warnings:
-                            for warning in info_warnings:
-                                st.info(warning)
-                    
-                    # Display summary with stereoisomer info
-                    with st.expander("📊 Summary", expanded=True):
-                        st.text(out["summary_text"])
-                        if enumerate_stereoisomers and len(out["results"]) > 1:
-                            st.info(f"🧬 Generated {len(out['results'])} stereoisomer(s)")
-                    
-                    # Display results for each ligand
-                    st.header("📈 Results")
-                    
-                    results = out["results"]
-                    
-                    # Create tabs for multiple ligands or columns for single ligand
-                    if len(results) > 1:
-                        tabs = st.tabs([r["name"] for r in results])
-                        
-                        for tab, result in zip(tabs, results):
-                            with tab:
-                                display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
+            if fmt_upper == "PDB":
+                file_path = f"{base_path}.pdb"
+                Chem.MolToPDBFile(mol, file_path)
+                saved_files["pdb"] = file_path
+                
+            elif fmt_upper == "MOL2":
+                file_path = f"{base_path}.mol2"
+                
+                # Try RDKit first
+                if hasattr(Chem, 'MolToMol2File'):
+                    try:
+                        Chem.MolToMol2File(mol, file_path)
+                        saved_files["mol2"] = file_path
+                        continue
+                    except Exception as e:
+                        print(f"RDKit MOL2 failed, will try Open Babel: {e}")
+                
+                # RDKit MOL2 not available, try Open Babel conversion
+                if "pdb" not in saved_files:
+                    # Need to generate PDB first for conversion
+                    pdb_path = f"{base_path}.pdb"
+                    try:
+                        Chem.MolToPDBFile(mol, pdb_path)
+                        saved_files["pdb"] = pdb_path
+                    except Exception as e:
+                        warnings.append(f"Could not generate PDB for MOL2 conversion: {e}")
+                        continue
+                
+                # Try converting PDB to MOL2 with Open Babel
+                pdb_path = saved_files.get("pdb")
+                if pdb_path and convert_pdb_to_mol2_obabel(pdb_path, file_path):
+                    saved_files["mol2"] = file_path
+                    mol2_via_obabel = True
+                else:
+                    if not check_obabel():
+                        warnings.append("MOL2 format not available. Install Open Babel (obabel) to enable MOL2 output.")
                     else:
-                        # Single ligand - use columns
-                        result = results[0]
-                        display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
-                    
-                    # Download section
-                    st.header("💾 Downloads")
-                    
-                    # Check if log file exists (for SMI_FILE input)
-                    log_file = out_dir / "processing.log"
-                    has_log = log_file.exists()
-                    
-                    if has_log:
-                        # Show log file download first for SMI_FILE input
-                        st.subheader("📋 Processing Log")
-                        st.download_button(
-                            "📄 Download Processing Log (.log)",
-                            data=log_file.read_bytes(),
-                            file_name="pkanet_processing.log",
-                            mime="text/plain",
-                            use_container_width=True,
-                            help="Tab-separated file with: Name | pH-adjusted SMILES | Charge | pKa"
-                        )
-                        st.markdown("---")
-                    
-                    st.subheader("📦 Structure Files")
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        # ZIP everything
-                        zip_all = tmp / "all_outputs.zip"
-                        zip_all_outputs(str(out_dir), str(zip_all))
-                        st.download_button(
-                            "📦 Download ALL outputs (ZIP)",
-                            data=zip_all.read_bytes(),
-                            file_name="pkanet_outputs.zip",
-                            mime="application/zip",
-                            use_container_width=True
-                        )
-                    
-                    with col2:
-                        # ZIP only minimized structures
-                        zip_pdb = tmp / "minimized_structures.zip"
-                        zip_minimized_pdb_only(str(out_dir), str(zip_pdb))
-                        st.download_button(
-                            "🧬 Download minimized structures (ZIP)",
-                            data=zip_pdb.read_bytes(),
-                            file_name="minimized_structures.zip",
-                            mime="application/zip",
-                            use_container_width=True
-                        )
-
+                        warnings.append("MOL2 conversion failed. Using PDB format instead.")
+        
         except Exception as e:
-            st.error(f"❌ Error: {e}")
-            st.exception(e)
+            warnings.append(f"Could not save {fmt_upper} format: {e}")
+            print(f"Warning: Could not save {fmt_upper} format: {e}")
+            continue
+    
+    # Add info message if MOL2 was generated via Open Babel
+    if mol2_via_obabel:
+        warnings.append("ℹ️ MOL2 files generated using Open Babel (converted from PDB)")
+    
+    return {"files": saved_files, "warnings": warnings}
 
 
-# Sidebar info
-st.sidebar.markdown("---")
-st.sidebar.markdown("### ℹ️ About")
-st.sidebar.info("""
-**pKaNET Cloud** uses:
-- **pKaPredict** for ML-based pKa prediction
-- **Dimorphite-DL** for pH-dependent protonation
-- **RDKit** for 3D structure generation
-- **MMFF/UFF** for energy minimization
-""")
+def run_job(
+    *,
+    input_type: str,
+    smiles_text: str | None,
+    uploaded_bytes: bytes | None,
+    uploaded_name: str | None,
+    target_pH: float,
+    output_name: str,
+    out_dir: str,
+    output_formats: List[str] = None,
+    enumerate_stereoisomers: bool = True,
+) -> Dict[str, Any]:
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    
+    # Default to PDB if no formats specified
+    if output_formats is None or len(output_formats) == 0:
+        output_formats = ["PDB"]
+    
+    # User-selected formats (SDF is handled separately, always generated)
+    formats_to_save = [fmt.upper() for fmt in output_formats]
 
-st.sidebar.markdown("### 📚 Citation")
-st.sidebar.markdown("""
-If you use this tool, please cite:
-- DFDD project: Hengphasatporn K., Duan L., Harada R., Shigeta Y. JCIM (2026)
-- Dimorphite-DL: Ropp PJ et al., J Cheminform (2019)
+    ligands_raw = []
 
-We thank **Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski**
-for developing **pKaPredict** and the study *"Machine Learning Meets pKa"*,
-which inspired **pKaNET-Cloud**.
+    if input_type == "SMILES":
+        base_smiles = (smiles_text or "").strip()
+        if not base_smiles:
+            raise ValueError("SMILES is empty.")
+        ligands_raw.append({"name": output_name or "ligand", "base_smiles": base_smiles})
 
-""")
+    elif input_type == "SMI_FILE":
+        if not uploaded_bytes:
+            raise ValueError("No .smi uploaded.")
+        text = uploaded_bytes.decode("utf-8", errors="replace")
+        for smi, name in parse_smi_lines(text):
+            ligands_raw.append({"name": name, "base_smiles": smi})
 
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #666; font-size: 0.9rem;'>
-    <p>🧬 Developed for pH-dependent ligand preparation | 
-    For questions: <a href='mailto:kowith@ccs.tsukuba.ac.jp'>kowith@ccs.tsukuba.ac.jp</a></p>
-</div>
-""", unsafe_allow_html=True)
+    elif input_type == "FILE":
+        if not uploaded_bytes or not uploaded_name:
+            raise ValueError("No ligand file uploaded.")
+        ext = os.path.splitext(uploaded_name)[1].lower()
+        tmp_path = out / f"uploaded{ext}"
+        tmp_path.write_bytes(uploaded_bytes)
+
+        mol_in = None
+        if ext == ".pdb":
+            mol_in = Chem.MolFromPDBFile(str(tmp_path), removeHs=False, sanitize=False)
+        elif ext == ".mol2":
+            mol_in = Chem.MolFromMol2File(str(tmp_path), removeHs=False, sanitize=False)
+        elif ext == ".sdf":
+            supplier = Chem.SDMolSupplier(str(tmp_path), removeHs=False, sanitize=False)
+            mol_in = next((m for m in supplier if m is not None), None)
+        else:
+            raise ValueError("Unsupported file type. Use .pdb, .mol2, or .sdf")
+
+        if mol_in is None:
+            raise ValueError("RDKit could not parse uploaded ligand.")
+
+        try:
+            frags = Chem.GetMolFrags(mol_in, asMols=True, sanitizeFrags=False)
+            if len(frags) > 1:
+                mol_in = max(frags, key=lambda m: m.GetNumHeavyAtoms())
+            Chem.SanitizeMol(mol_in)
+        except Exception:
+            pass
+
+        base_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol_in), canonical=True)
+        ligands_raw.append({"name": output_name or os.path.splitext(uploaded_name)[0], "base_smiles": base_smiles})
+
+    else:
+        raise ValueError("Unknown input_type")
+
+    # Enumerate stereoisomers if requested
+    ligands = []
+    if enumerate_stereoisomers:
+        for lig in ligands_raw:
+            ligands.extend(generate_RS_variants(lig["base_smiles"], lig["name"]))
+    else:
+        for lig in ligands_raw:
+            ligands.append({"name": lig["name"], "stereo": None, "base_smiles": lig["base_smiles"]})
+
+    results = []
+    format_warnings = []  # Collect warnings across all molecules
+    
+    for lig in ligands:
+        base_name = lig["name"]
+        stereo = lig.get("stereo")
+        suffix = f"_{stereo}" if stereo else ""
+        pretty_name = base_name + suffix
+
+        base_smiles = lig["base_smiles"]
+
+        try:
+            pka_pred = predict_pka_pkanet(base_smiles)
+        except Exception:
+            pka_pred = None
+
+        ph_smiles, formal_charge = ph_adjust_smiles_dimorphite(base_smiles, target_pH)
+        mol_min = build_minimized_3d(ph_smiles)
+
+        # Save molecule in requested formats (SDF always included)
+        base_file_path = str(out / f"{base_name}{suffix}_min")
+        save_result = save_molecule_files(mol_min, base_file_path, formats_to_save)
+        saved_files = save_result["files"]
+        
+        # Save 2D structure as PNG for visualization/download
+        png_path = str(out / f"{base_name}{suffix}_2D.png")
+        if save_2d_structure_image(ph_smiles, png_path):
+            saved_files["png_2d"] = png_path
+        
+        # Collect unique warnings
+        for warning in save_result["warnings"]:
+            if warning not in format_warnings:
+                format_warnings.append(warning)
+
+        result_entry = {
+            "name": pretty_name,
+            "base_smiles": base_smiles,
+            "ph_smiles": ph_smiles,
+            "pka_pred": pka_pred,
+            "formal_charge": formal_charge,
+        }
+        
+        # Add stereoisomer ID if it was enumerated
+        if stereo:
+            result_entry["stereoisomer_id"] = stereo
+        
+        # Add file paths to result
+        if "pdb" in saved_files:
+            result_entry["minimized_pdb"] = saved_files["pdb"]
+        if "sdf" in saved_files:
+            result_entry["minimized_sdf"] = saved_files["sdf"]
+        if "mol2" in saved_files:
+            result_entry["minimized_mol2"] = saved_files["mol2"]
+        
+        results.append(result_entry)
+
+    # Write summary file
+    summary_lines = []
+    for r in results:
+        summary_lines.append(f"{r['name']}")
+        summary_lines.append(f"  Base SMILES: {r['base_smiles']}")
+        summary_lines.append(f"  pH SMILES  : {r['ph_smiles']}")
+        if r["pka_pred"] is not None:
+            summary_lines.append(f"  pKa (ML)   : {r['pka_pred']:.2f}")
+        summary_lines.append(f"  Charge     : {r['formal_charge']}")
+        
+        # Show what formats were actually generated
+        generated_formats = []
+        if "minimized_pdb" in r:
+            generated_formats.append("PDB")
+        if "minimized_mol2" in r:
+            generated_formats.append("MOL2")
+        if "minimized_sdf" in r:
+            generated_formats.append("SDF")
+        summary_lines.append(f"  Formats    : {', '.join(generated_formats)}")
+        
+        if "stereoisomer_id" in r:
+            summary_lines.append(f"  Stereoisomer: {r['stereoisomer_id']}")
+        summary_lines.append("")
+    summary_text = "\n".join(summary_lines).strip()
+    (out / "summary.txt").write_text(summary_text + "\n")
+    
+    # Create log file for SMI_FILE input
+    if input_type == "SMI_FILE" and len(results) > 0:
+        log_lines = []
+        log_lines.append("# pKaNET Cloud - Processing Log")
+        log_lines.append(f"# Target pH: {target_pH}")
+        log_lines.append(f"# Stereoisomer enumeration: {'enabled' if enumerate_stereoisomers else 'disabled'}")
+        log_lines.append(f"# Total molecules processed: {len(results)}")
+        log_lines.append("#" + "="*70)
+        log_lines.append("")
+        log_lines.append("# Format: Name | pH-adjusted SMILES | Formal Charge | pKa (predicted)")
+        log_lines.append("")
+        
+        for r in results:
+            pka_str = f"{r['pka_pred']:.2f}" if r["pka_pred"] is not None else "N/A"
+            log_lines.append(f"{r['name']}\t{r['ph_smiles']}\t{r['formal_charge']}\t{pka_str}")
+        
+        (out / "processing.log").write_text("\n".join(log_lines) + "\n")
+
+    return {"results": results, "summary_text": summary_text, "out_dir": str(out), "format_warnings": format_warnings}
+
+def zip_minimized_structures(out_dir: str, zip_path: str, selected_formats: List[str]) -> str:
+    """
+    Zip only user-selected structure formats (PDB and/or MOL2), excluding SDF
+    
+    Args:
+        out_dir: Output directory containing structure files
+        zip_path: Path for output zip file
+        selected_formats: List of user-selected formats (e.g., ["PDB", "MOL2"])
+    
+    Returns:
+        Path to created zip file
+    """
+    out = Path(out_dir)
+    zp = Path(zip_path)
+    
+    # Convert to lowercase for comparison
+    formats_lower = [fmt.lower() for fmt in selected_formats]
+    
+    with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
+        for p in out.glob("*_min.*"):
+            suffix = p.suffix.lower()
+            # Only include user-selected formats, exclude .sdf
+            if suffix == ".pdb" and "pdb" in formats_lower:
+                z.write(p, arcname=p.name)
+            elif suffix == ".mol2" and "mol2" in formats_lower:
+                z.write(p, arcname=p.name)
+    
+    return str(zp)
+
+
+def zip_all_outputs(out_dir: str, zip_path: str) -> str:
+    """
+    Zip all output files including structures, logs, summaries, and 2D structure PNGs
+    """
+    out = Path(out_dir)
+    zp = Path(zip_path)
+    with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
+        for p in out.rglob("*"):
+            if p.is_file():
+                z.write(p, arcname=p.relative_to(out))
+    return str(zp)
