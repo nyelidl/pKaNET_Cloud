@@ -77,8 +77,8 @@ else:
     show_2d = False
     st.sidebar.info("ℹ️ 2D visualization not available on this server")
 show_3d = st.sidebar.checkbox("Show 3D structure", value=True)
-viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 600, 50)
-viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 400, 50)
+viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 400, 50)
+viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 200, 50)
 
 smiles_text = None
 uploaded = None
