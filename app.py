@@ -189,12 +189,25 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
     
     with info_col2:
         st.markdown(f"**Target pH:** `{target_pH}`")
+        pka_src = result.get("pka_source") or "pKaPredict"
         if result["pka_pred"] is not None:
-            pka_source = result.get("pka_source", "N/A")
-            st.markdown(f"**Predicted pKa:** `{result['pka_pred']:.2f}` *({pka_source})*")
+            if pka_src == "IUPAC":
+                n = result.get("pka_n")
+                pka_min = result.get("pka_min")
+                pka_max = result.get("pka_max")
+                extra = []
+                if n:
+                    extra.append(f"n={n}")
+                if pka_min is not None and pka_max is not None and (pka_min != pka_max):
+                    extra.append(f"range={pka_min:.2f}–{pka_max:.2f}")
+                extra_str = f" ({', '.join(extra)})" if extra else ""
+                st.markdown(f"**pKa (IUPAC dataset):** `{result['pka_pred']:.2f}`{extra_str}")
+                st.caption("Source: IUPAC Digitized pKa Dataset (lookup-first).")
+            else:
+                st.markdown(f"**Predicted pKa (pKaPredict ML):** `{result['pka_pred']:.2f}`")
         else:
-            st.markdown(f"**Predicted pKa:** `N/A` ⚠️")
-            st.caption("⚠️ pKa prediction unavailable - check warnings below")
+            st.markdown("**pKa:** `N/A` ⚠️")
+            st.caption("⚠️ pKa lookup/prediction unavailable - check warnings below")
         st.markdown(f"**Formal Charge at pH {target_pH}:** `{result['formal_charge']:+d}`")
         # Show stereoisomer info if available
         if "stereoisomer_id" in result:
@@ -421,12 +434,10 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ℹ️ About")
 st.sidebar.info("""
 **pKaNET Cloud** uses:
-- **IUPAC pKa Database** for known compounds
 - **pKaPredict** for ML-based pKa prediction
 - **Dimorphite-DL** for pH-dependent protonation
 - **RDKit** for 3D structure generation
 - **MMFF/UFF** for energy minimization
-- **Open Babel** for MOL2 conversion (if available)
 """)
 
 st.sidebar.markdown("### 📚 Citation")
@@ -434,7 +445,9 @@ st.sidebar.markdown("""
 If you use this tool, please cite:
 - DFDD project: Hengphasatporn K., Duan L., Harada R., Shigeta Y. JCIM (2026)
 - Dimorphite-DL: Ropp PJ et al., J Cheminform (2019)
-- IUPAC Digitized pKa Dataset (v2.3c): Zheng J.W., Lafontant-Joseph O. IUPAC (2025)
+- IUPAC dataset: Zheng, Jonathan W. and Lafontant-Joseph, Olivier. (2025) IUPAC Digitized pKa Dataset, v2.3c. Copyright © 2025 International Union of Pure and Applied Chemistry (IUPAC), reproduced by permission of IUPAC and licensed under a CC BY-NC 4.0 license. DOI: 10.5281/zenodo.7236453
+
+**IUPAC lookup (optional):** set `IUPAC_PKA_CSV_PATH` (local CSV) or `IUPAC_PKA_CSV_URL` (CSV URL) in your Streamlit environment.
 
 We thank **Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski**
 for developing **pKaPredict** and the study *"Machine Learning Meets pKa"*,
