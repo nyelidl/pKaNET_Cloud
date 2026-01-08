@@ -748,13 +748,7 @@ except Exception as e:
         
         (out / "processing.log").write_text("\n".join(log_lines) + "\n")
 
-def run_pipeline(...):
-    ...
-    return {
-        "results": results,
-        "summary_text": summary_text,
-        "out_dir": str(out_dir),
-    }
+    return {"results": results, "summary_text": summary_text, "out_dir": str(out), "format_warnings": format_warnings}
 
 def zip_minimized_structures(out_dir: str, zip_path: str, selected_formats: List[str]) -> str:
     """
