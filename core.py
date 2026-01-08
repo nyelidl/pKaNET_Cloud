@@ -459,7 +459,10 @@ def run_job(
         summary_lines.append("-" * 80)
         summary_lines.append(f"  Base SMILES          : {r['base_smiles']}")
         summary_lines.append(f"  pH-adjusted SMILES   : {r['ph_smiles']}")
-        summary_lines.append(f"  Predicted pKa        : {r['pka_pred']:.2f if r['pka_pred'] is not None else 'N/A'}")
+        
+        # Format pKa value safely
+        pka_value = f"{r['pka_pred']:.2f}" if r['pka_pred'] is not None else "N/A"
+        summary_lines.append(f"  Predicted pKa        : {pka_value}")
         summary_lines.append(f"  Formal Charge (pH {target_pH}): {r['formal_charge']:+d}")
         
         # Show what formats were actually generated
