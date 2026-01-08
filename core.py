@@ -89,21 +89,27 @@ def predict_pka_pkanet(smiles: str) -> float:
         raise ValueError("RDKit could not parse SMILES for pKa prediction.")
     
     try:
-        # Try with descriptor_names parameter
-        desc = smiles_to_rdkit_descriptors([smiles])
-    except TypeError:
-        # Fallback without descriptor_names parameter
+        # pKaPredict expects a single SMILES string, not a list
+        # Try different possible API signatures
         try:
-            desc = smiles_to_rdkit_descriptors([smiles], descriptor_names=None)
-        except Exception as e:
-            print(f"Warning: Could not generate descriptors for pKa prediction: {e}")
-            raise
+            # Try passing single SMILES directly
+            desc = smiles_to_rdkit_descriptors(smiles)
+        except:
+            # Try with list format
+            try:
+                desc = smiles_to_rdkit_descriptors([smiles])
+            except:
+                # Try with descriptor_names parameter
+                desc = smiles_to_rdkit_descriptors(smiles, descriptor_names=None)
     except Exception as e:
-        print(f"Warning: Descriptor generation failed: {e}")
+        print(f"Warning: Could not generate descriptors for pKa prediction: {e}")
         raise
     
     try:
-        pka_value = predict_pKa(get_model(), desc)[0]
+        pka_value = predict_pKa(get_model(), desc)
+        # Handle both single value and array returns
+        if isinstance(pka_value, (list, tuple)):
+            pka_value = pka_value[0]
         return float(pka_value)
     except Exception as e:
         print(f"Warning: pKa prediction failed: {e}")
