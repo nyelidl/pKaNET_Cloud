@@ -74,15 +74,40 @@ def get_model():
 
 
 def predict_pka_pkanet(smiles: str) -> float:
+    """
+    Predict pKa using pKaPredict ML model
+    
+    Args:
+        smiles: SMILES string
+    
+    Returns:
+        Predicted pKa value as float
+    """
     smiles = smiles.strip()
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError("RDKit could not parse SMILES for pKa prediction.")
+    
     try:
+        # Try with descriptor_names parameter
         desc = smiles_to_rdkit_descriptors([smiles])
     except TypeError:
-        desc = smiles_to_rdkit_descriptors([smiles], descriptor_names=None)
-    return float(predict_pKa(get_model(), desc)[0])
+        # Fallback without descriptor_names parameter
+        try:
+            desc = smiles_to_rdkit_descriptors([smiles], descriptor_names=None)
+        except Exception as e:
+            print(f"Warning: Could not generate descriptors for pKa prediction: {e}")
+            raise
+    except Exception as e:
+        print(f"Warning: Descriptor generation failed: {e}")
+        raise
+    
+    try:
+        pka_value = predict_pKa(get_model(), desc)[0]
+        return float(pka_value)
+    except Exception as e:
+        print(f"Warning: pKa prediction failed: {e}")
+        raise
 
 def ph_adjust_smiles_dimorphite(smiles_str: str, ph: float):
     prot_list = protonate_smiles(smiles_str, ph_min=ph, ph_max=ph, max_variants=1)
@@ -398,10 +423,17 @@ def run_job(
 
         base_smiles = lig["base_smiles"]
 
+        # Predict pKa with better error handling
+        pka_pred = None
         try:
             pka_pred = predict_pka_pkanet(base_smiles)
-        except Exception:
-            pka_pred = None
+            print(f"pKa prediction for {pretty_name}: {pka_pred:.2f}")
+        except Exception as e:
+            print(f"Warning: pKa prediction failed for {pretty_name}: {e}")
+            # Add warning to format_warnings
+            warning_msg = f"pKa prediction failed for {pretty_name}: {str(e)}"
+            if warning_msg not in format_warnings:
+                format_warnings.append(warning_msg)
 
         ph_smiles, formal_charge = ph_adjust_smiles_dimorphite(base_smiles, target_pH)
         mol_min = build_minimized_3d(ph_smiles)
