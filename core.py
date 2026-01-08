@@ -5,8 +5,6 @@ import os
 import zipfile
 from typing import Optional, Dict, Any, List, Tuple
 
-import pandas as pd
-
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
@@ -68,177 +66,6 @@ def convert_pdb_to_mol2_obabel(pdb_path: str, mol2_path: str) -> bool:
 # Load model once (cached in module)
 _PKANET_MODEL = None
 _DESCRIPTOR_NAMES = None
-
-
-# =========================
-# IUPAC Digitized pKa Dataset (lookup-first; fallback to ML)
-# =========================
-# This is a DATASET, not a Python package. We cache a canonical-SMILES → [pKa values] map.
-# Configure one of the following (in order of priority):
-#   1) IUPAC_PKA_CSV_PATH  (local path to CSV file)
-#   2) IUPAC_PKA_CSV_URL   (HTTP(S) URL to CSV file)
-#
-# Notes:
-# - The IUPAC dataset contains multiple measurements per molecule; we report the median by default.
-# - Matching is done on RDKit-canonical SMILES (isomericSmiles=True).
-
-_IUPAC_PKA_MAP = None  # type: Optional[Dict[str, List[float]]]
-_IUPAC_META = None     # type: Optional[Dict[str, Any]]
-
-
-def _can_smi(smiles: str) -> Optional[str]:
-    """Canonicalize SMILES using RDKit; returns None if parsing fails."""
-    try:
-        mol = Chem.MolFromSmiles((smiles or '').strip())
-        if mol is None:
-            return None
-        return Chem.MolToSmiles(mol, canonical=True, isomericSmiles=True)
-    except Exception:
-        return None
-
-
-def _detect_col(cols, candidates):
-    for c in candidates:
-        if c in cols:
-            return c
-    # case-insensitive fallback
-    lower = {c.lower(): c for c in cols}
-    for c in candidates:
-        if c.lower() in lower:
-            return lower[c.lower()]
-    return None
-
-
-def load_iupac_pka_dataset(force: bool = False) -> Tuple[Optional[Dict[str, List[float]]], Dict[str, Any]]:
-    """Load IUPAC CSV into a canonical-smiles index. Safe to call repeatedly."""
-    global _IUPAC_PKA_MAP, _IUPAC_META
-    if _IUPAC_PKA_MAP is not None and not force:
-        return _IUPAC_PKA_MAP, (_IUPAC_META or {})
-
-    csv_path = os.environ.get("IUPAC_PKA_CSV_PATH", "").strip()
-    csv_url  = os.environ.get("IUPAC_PKA_CSV_URL", "").strip()
-
-    df = None
-    meta = {"loaded": False, "source": None, "rows": 0, "molecules": 0, "smiles_col": None, "pka_col": None, "errors": []}
-
-    try:
-        if csv_path:
-            p = Path(csv_path)
-            if p.exists():
-                df = pd.read_csv(p)
-                meta["source"] = f"file:{p}"
-            else:
-                meta["errors"].append(f"IUPAC_PKA_CSV_PATH not found: {p}")
-
-        if df is None and csv_url:
-            df = pd.read_csv(csv_url)
-            meta["source"] = f"url:{csv_url}"
-    except Exception as e:
-        meta["errors"].append(f"Failed to load IUPAC CSV: {e}")
-        df = None
-
-    if df is None:
-        _IUPAC_PKA_MAP = None
-        _IUPAC_META = meta
-        return None, meta
-
-    cols = list(df.columns)
-    smiles_col = _detect_col(cols, ["SMILES", "smiles"])
-    pka_col    = _detect_col(cols, ["pka_value", "pKa", "pka", "pka1", "pka2"])
-
-    meta["rows"] = int(len(df))
-    meta["smiles_col"] = smiles_col
-    meta["pka_col"] = pka_col
-
-    if smiles_col is None or pka_col is None:
-        meta["errors"].append(f"Could not detect required columns. Columns={cols}")
-        _IUPAC_PKA_MAP = None
-        _IUPAC_META = meta
-        return None, meta
-
-    # Build canonical map
-    pka_map: Dict[str, List[float]] = {}
-    bad = 0
-    for smi, val in zip(df[smiles_col].astype(str).tolist(), df[pka_col].tolist()):
-        can = _can_smi(smi)
-        if can is None:
-            bad += 1
-            continue
-        try:
-            fval = float(val)
-        except Exception:
-            bad += 1
-            continue
-        pka_map.setdefault(can, []).append(fval)
-
-    meta["molecules"] = int(len(pka_map))
-    meta["bad_rows"] = int(bad)
-    meta["loaded"] = True
-
-    _IUPAC_PKA_MAP = pka_map
-    _IUPAC_META = meta
-    return _IUPAC_PKA_MAP, meta
-
-
-def lookup_iupac_pka(smiles: str) -> Optional[Dict[str, Any]]:
-    """Return stats dict if SMILES is found in IUPAC map; otherwise None."""
-    pka_map, meta = load_iupac_pka_dataset(force=False)
-    if not pka_map:
-        return None
-
-    can = _can_smi(smiles)
-    if can is None:
-        return None
-
-    values = pka_map.get(can)
-    if not values:
-        return None
-
-    values_sorted = sorted(values)
-    n = len(values_sorted)
-    # median
-    if n % 2 == 1:
-        med = values_sorted[n // 2]
-    else:
-        med = 0.5 * (values_sorted[n // 2 - 1] + values_sorted[n // 2])
-
-    mean = sum(values_sorted) / n
-    return {
-        "canonical": can,
-        "pka_median": float(med),
-        "pka_mean": float(mean),
-        "pka_min": float(values_sorted[0]),
-        "pka_max": float(values_sorted[-1]),
-        "n": int(n),
-        "all": values_sorted,
-        "meta": meta,
-    }
-
-
-def get_pka_value(smiles: str) -> Dict[str, Any]:
-    """Lookup-first pKa: IUPAC dataset → fallback to pKaPredict (ML)."""
-    hit = lookup_iupac_pka(smiles)
-    if hit is not None:
-        return {
-            "pka": hit["pka_median"],
-            "source": "IUPAC",
-            "n": hit["n"],
-            "pka_min": hit["pka_min"],
-            "pka_max": hit["pka_max"],
-            "canonical": hit["canonical"],
-        }
-
-    # fallback: ML
-    pka_ml = predict_pka_pkanet(smiles)
-    return {
-        "pka": float(pka_ml),
-        "source": "pKaPredict",
-        "n": None,
-        "pka_min": None,
-        "pka_max": None,
-        "canonical": _can_smi(smiles),
-    }
-
 
 def get_model():
     global _PKANET_MODEL, _DESCRIPTOR_NAMES
@@ -609,30 +436,17 @@ def run_job(
 
         base_smiles = lig["base_smiles"]
 
-# pKa value (lookup-first): IUPAC dataset → fallback to pKaPredict (ML)
-pka_pred = None
-pka_source = None
-pka_n = None
-pka_min = None
-pka_max = None
-try:
-    pka_info = get_pka_value(base_smiles)
-    pka_pred = pka_info.get("pka")
-    pka_source = pka_info.get("source")
-    pka_n = pka_info.get("n")
-    pka_min = pka_info.get("pka_min")
-    pka_max = pka_info.get("pka_max")
-    if pka_pred is not None and pka_source:
-        if pka_source == "IUPAC":
-            n_str = f", n={pka_n}" if pka_n is not None else ""
-            print(f"✓ pKa (IUPAC lookup){n_str}: {pka_pred:.2f}")
-        else:
-            print(f"✓ pKa (pKaPredict ML): {pka_pred:.2f}")
-except Exception as e:
-    print(f"Warning: pKa retrieval/prediction failed for {pretty_name}: {e}")
-    warning_msg = f"pKa retrieval/prediction failed for {pretty_name}: {str(e)}"
-    if warning_msg not in format_warnings:
-        format_warnings.append(warning_msg)
+        # Predict pKa with better error handling
+        pka_pred = None
+        try:
+            pka_pred = predict_pka_pkanet(base_smiles)
+            print(f"pKa prediction for {pretty_name}: {pka_pred:.2f}")
+        except Exception as e:
+            print(f"Warning: pKa prediction failed for {pretty_name}: {e}")
+            # Add warning to format_warnings
+            warning_msg = f"pKa prediction failed for {pretty_name}: {str(e)}"
+            if warning_msg not in format_warnings:
+                format_warnings.append(warning_msg)
 
         ph_smiles, formal_charge = ph_adjust_smiles_dimorphite(base_smiles, target_pH)
         mol_min = build_minimized_3d(ph_smiles)
@@ -657,10 +471,6 @@ except Exception as e:
             "base_smiles": base_smiles,
             "ph_smiles": ph_smiles,
             "pka_pred": pka_pred,
-            "pka_source": pka_source,
-            "pka_n": pka_n,
-            "pka_min": pka_min,
-            "pka_max": pka_max,
             "formal_charge": formal_charge,
         }
         
@@ -695,17 +505,9 @@ except Exception as e:
         summary_lines.append(f"  Base SMILES          : {r['base_smiles']}")
         summary_lines.append(f"  pH-adjusted SMILES   : {r['ph_smiles']}")
         
-        # Format pKa value safely (source-aware)
+        # Format pKa value safely
         pka_value = f"{r['pka_pred']:.2f}" if r['pka_pred'] is not None else "N/A"
-        src = r.get("pka_source") or "unknown"
-        if src == "IUPAC":
-            n = r.get("pka_n")
-            n_str = f" (n={n})" if n else ""
-            summary_lines.append(f"  pKa (IUPAC){n_str}     : {pka_value}")
-        elif src == "pKaPredict":
-            summary_lines.append(f"  Predicted pKa (ML)   : {pka_value}")
-        else:
-            summary_lines.append(f"  pKa                 : {pka_value}")
+        summary_lines.append(f"  Predicted pKa        : {pka_value}")
         summary_lines.append(f"  Formal Charge (pH {target_pH}): {r['formal_charge']:+d}")
         
         # Show what formats were actually generated
@@ -723,7 +525,7 @@ except Exception as e:
         summary_lines.append("")
     
     summary_lines.append("=" * 80)
-    summary_lines.append("pKa source: IUPAC dataset (lookup-first) → pKaPredict (ML fallback)")
+    summary_lines.append("pKa Prediction powered by pKaPredict (ML-based)")
     summary_lines.append("=" * 80)
     
     summary_text = "\n".join(summary_lines).strip()
@@ -736,10 +538,10 @@ except Exception as e:
         log_lines.append(f"# Target pH: {target_pH}")
         log_lines.append(f"# Stereoisomer enumeration: {'enabled' if enumerate_stereoisomers else 'disabled'}")
         log_lines.append(f"# Total molecules processed: {len(results)}")
-        log_lines.append(f"# pKa source: IUPAC dataset (lookup-first) → pKaPredict (ML fallback)")
+        log_lines.append(f"# pKa prediction: pKaPredict (Machine Learning)")
         log_lines.append("#" + "="*70)
         log_lines.append("")
-        log_lines.append("# Columns: Name | pH-adjusted SMILES | Formal Charge | pKa | pKa_source")
+        log_lines.append("# Columns: Name | pH-adjusted SMILES | Formal Charge | Predicted pKa")
         log_lines.append("")
         
         for r in results:
