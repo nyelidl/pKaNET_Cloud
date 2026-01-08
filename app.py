@@ -190,9 +190,10 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
     with info_col2:
         st.markdown(f"**Target pH:** `{target_pH}`")
         if result["pka_pred"] is not None:
-            st.markdown(f"**Predicted pKa (pKaPredict):** `{result['pka_pred']:.2f}`")
+            pka_source = result.get("pka_source", "N/A")
+            st.markdown(f"**Predicted pKa:** `{result['pka_pred']:.2f}` *({pka_source})*")
         else:
-            st.markdown(f"**Predicted pKa (pKaPredict):** `N/A` ⚠️")
+            st.markdown(f"**Predicted pKa:** `N/A` ⚠️")
             st.caption("⚠️ pKa prediction unavailable - check warnings below")
         st.markdown(f"**Formal Charge at pH {target_pH}:** `{result['formal_charge']:+d}`")
         # Show stereoisomer info if available
@@ -420,10 +421,12 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ℹ️ About")
 st.sidebar.info("""
 **pKaNET Cloud** uses:
+- **IUPAC pKa Database** for known compounds
 - **pKaPredict** for ML-based pKa prediction
 - **Dimorphite-DL** for pH-dependent protonation
 - **RDKit** for 3D structure generation
 - **MMFF/UFF** for energy minimization
+- **Open Babel** for MOL2 conversion (if available)
 """)
 
 st.sidebar.markdown("### 📚 Citation")
@@ -431,6 +434,7 @@ st.sidebar.markdown("""
 If you use this tool, please cite:
 - DFDD project: Hengphasatporn K., Duan L., Harada R., Shigeta Y. JCIM (2026)
 - Dimorphite-DL: Ropp PJ et al., J Cheminform (2019)
+- IUPAC Digitized pKa Dataset (v2.3c): Zheng J.W., Lafontant-Joseph O. IUPAC (2025)
 
 We thank **Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski**
 for developing **pKaPredict** and the study *"Machine Learning Meets pKa"*,
