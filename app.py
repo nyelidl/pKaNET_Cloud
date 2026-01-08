@@ -1,7 +1,7 @@
 import streamlit as st
 import tempfile
 from pathlib import Path
-from core import run_job, zip_all_outputs, zip_minimized_structures
+from core import run_job, zip_all_outputs, zip_minimized_pdb_only
 import streamlit.components.v1 as components
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -52,38 +52,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-header">🧪 pKaNET Cloud</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="sub-header">'
-    'Machine-Learning–Driven Protonation & pH-Aware 3D Structure Generation<br>'
-    '<span style="font-size:0.9em; font-weight:normal;">'
-    'Instant pH-aware 3D structures for docking, virtual screening, and education – '
-    'with automatic R/S stereoisomer enumeration.'
-    '</span>'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    '<div class="sub-header">'
-    'This is part of the <a href="https://github.com/nyelidl/DFDD" '
-    'target="_blank"><strong>DFDD Project</strong></a>.'
-    '</div>',
-    unsafe_allow_html=True
-)
+st.markdown('<div class="sub-header">AI-Based Protonation & 3D Structure Builder</div>', unsafe_allow_html=True)
 
 # Sidebar configuration
 st.sidebar.header("⚙️ Input / Options")
 input_type = st.sidebar.selectbox("Input type", ["SMILES", "SMI_FILE", "FILE"])
 target_pH = st.sidebar.slider("Target pH", 2.0, 12.0, 7.0, 0.1)
 output_name = st.sidebar.text_input("Output name (for single SMILES/FILE)", value="ligand")
-
-# Add stereoisomer enumeration option
-st.sidebar.header("🧬 Stereochemistry")
-enumerate_stereoisomers = st.sidebar.checkbox(
-    "Enumerate R/S stereoisomers",
-    value=True,
-    help="Automatically generate all possible R/S stereoisomers for undefined chiral centers"
-)
 
 st.sidebar.header("📄 Output Format")
 output_formats = st.sidebar.multiselect(
@@ -104,34 +79,21 @@ else:
     st.sidebar.info("ℹ️ 2D visualization not available on this server")
 show_3d = st.sidebar.checkbox("Show 3D structure", value=True)
 
-viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 300, 50)
-viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 300, 50)
+viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 600, 50)
+viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 400, 50)
 
 smiles_text = None
 uploaded = None
 
 # Input section
 if input_type == "SMILES":
-    smiles_text = st.text_area(
-        "SMILES\nexample: CC(C)CC1=CC=C(C=C1)C(C)C(=O)O",
-        height=120,
-        placeholder="Paste a SMILES here:",
-    )
-
+    smiles_text = st.text_area("SMILES", height=120, placeholder="Paste a SMILES here (e.g., CC(C)Cc1ccc(cc1)C(C)C(=O)O)")
 elif input_type == "SMI_FILE":
-    uploaded = st.file_uploader(
-        "Upload .smi (SMILES [name] per line)",
-        type=["smi", "txt"],
-    )
+    uploaded = st.file_uploader("Upload .smi (SMILES [name] per line)", type=["smi", "txt"])
     st.info("📝 Format: `SMILES [optional_name]` per line")
-
 else:
-    uploaded = st.file_uploader(
-        "Upload ligand file",
-        type=["pdb", "mol2", "sdf"],
-    )
-    st.info("📝 Supported formats: PDB, MOL2, SDF")
-
+    uploaded = st.file_uploader("Upload ligand file", type=["pdb", "mol2", "sdf"])
+    st.info("📁 Supported formats: PDB, MOL2, SDF")
 
 # Helper function for 2D visualization
 def draw_molecule_2d(smiles_str, size=(400, 300)):
@@ -192,9 +154,6 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
             st.markdown(f"**Predicted pKa:** `{result['pka_pred']:.2f}`")
         st.markdown(f"**Formal Charge:** `{result['formal_charge']}`")
         st.markdown(f"**Target pH:** `{target_pH}`")
-        # Show stereoisomer info if available
-        if "stereoisomer_id" in result:
-            st.markdown(f"**Stereoisomer:** `{result['stereoisomer_id']}`")
     
     # Visualization section
     if show_2d or show_3d:
@@ -248,28 +207,20 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
                 else:
                     st.warning("SDF file not available for 3D visualization")
     
-    # File information - show what was actually generated
+    # File information
     with st.expander("📁 Output Files"):
         available_files = []
-        
-        # Check what files actually exist and display them
+        # Only show user-selected formats (not SDF, which is for visualization only)
         if "minimized_pdb" in result and result["minimized_pdb"]:
-            pdb_path = Path(result["minimized_pdb"])
-            if pdb_path.exists():
-                available_files.append(f"- **PDB:** `{pdb_path.name}`")
-        
+            if "PDB" in output_formats:
+                available_files.append(f"- **PDB:** `{Path(result['minimized_pdb']).name}`")
         if "minimized_mol2" in result and result["minimized_mol2"]:
-            mol2_path = Path(result["minimized_mol2"])
-            if mol2_path.exists():
-                available_files.append(f"- **MOL2:** `{mol2_path.name}`")
-        
-        if "minimized_sdf" in result and result["minimized_sdf"]:
-            sdf_path = Path(result["minimized_sdf"])
-            if sdf_path.exists():
-                available_files.append(f"- **SDF:** `{sdf_path.name}` (for visualization)")
+            if "MOL2" in output_formats:
+                available_files.append(f"- **MOL2:** `{Path(result['minimized_mol2']).name}`")
         
         if available_files:
             st.markdown("\n".join(available_files))
+            st.info("ℹ️ SDF files are generated automatically for 3D visualization")
         else:
             st.warning("No output files generated")
 
@@ -301,30 +252,13 @@ if run_btn:
                         output_name=output_name,
                         out_dir=str(out_dir),
                         output_formats=output_formats,
-                        enumerate_stereoisomers=enumerate_stereoisomers,
                     )
 
                     st.success("✅ Analysis complete!")
                     
-                    # Show format warnings if any
-                    if "format_warnings" in out and out["format_warnings"]:
-                        info_warnings = [w for w in out["format_warnings"] if w.startswith("ℹ️")]
-                        error_warnings = [w for w in out["format_warnings"] if not w.startswith("ℹ️")]
-                        
-                        if error_warnings:
-                            with st.expander("⚠️ Format Warnings", expanded=False):
-                                for warning in error_warnings:
-                                    st.warning(warning)
-                        
-                        if info_warnings:
-                            for warning in info_warnings:
-                                st.info(warning)
-                    
-                    # Display summary with stereoisomer info
+                    # Display summary
                     with st.expander("📊 Summary", expanded=True):
                         st.text(out["summary_text"])
-                        if enumerate_stereoisomers and len(out["results"]) > 1:
-                            st.info(f"🧬 Generated {len(out['results'])} stereoisomer(s)")
                     
                     # Display results for each ligand
                     st.header("📈 Results")
@@ -367,36 +301,27 @@ if run_btn:
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        # ZIP everything (including 2D PNG images if available)
+                        # ZIP everything
                         zip_all = tmp / "all_outputs.zip"
                         zip_all_outputs(str(out_dir), str(zip_all))
                         st.download_button(
                             "📦 Download ALL outputs (ZIP)",
                             data=zip_all.read_bytes(),
-                            file_name="pkanet_all_outputs.zip",
+                            file_name="pkanet_outputs.zip",
                             mime="application/zip",
-                            use_container_width=True,
-                            help="Includes all structure files, logs, summaries, and 2D images"
+                            use_container_width=True
                         )
                     
                     with col2:
-                        # ZIP only user-selected formats (PDB and/or MOL2, excluding SDF)
-                        zip_structures = tmp / "selected_structures.zip"
-                        zip_minimized_structures(str(out_dir), str(zip_structures), output_formats)
-                        
-                        # Create descriptive button text based on selected formats
-                        if len(output_formats) == 1:
-                            btn_text = f"🧬 Download minimized structures in {output_formats[0]} files (ZIP)"
-                        else:
-                            btn_text = f"🧬 Download {' + '.join(output_formats)} files (ZIP)"
-                        
+                        # ZIP only minimized PDB
+                        zip_pdb = tmp / "minimized_pdb_only.zip"
+                        zip_minimized_pdb_only(str(out_dir), str(zip_pdb))
                         st.download_button(
-                            btn_text,
-                            data=zip_structures.read_bytes(),
-                            file_name=f"pkanet_{'_'.join([f.lower() for f in output_formats])}.zip",
+                            "🧬 Download minimized PDB only (ZIP)",
+                            data=zip_pdb.read_bytes(),
+                            file_name="minimized_pdb_outputs.zip",
                             mime="application/zip",
-                            use_container_width=True,
-                            help=f"Only {' and '.join(output_formats)} structure files (SDF excluded)"
+                            use_container_width=True
                         )
 
         except Exception as e:
@@ -409,22 +334,20 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ℹ️ About")
 st.sidebar.info("""
 **pKaNET Cloud** uses:
-- **pKaPredict** for ML-based pKa prediction
+- **pKaPredict** for ML-based pKa prediction ⚡
 - **Dimorphite-DL** for pH-dependent protonation
 - **RDKit** for 3D structure generation
 - **MMFF/UFF** for energy minimization
+
+**pKa Prediction:**
+Machine learning model trained on experimental pKa data to predict acid/base dissociation constants.
 """)
 
 st.sidebar.markdown("### 📚 Citation")
 st.sidebar.markdown("""
 If you use this tool, please cite:
-- DFDD project: Hengphasatporn K., Duan L., Harada R., Shigeta Y. JCIM (2026)
+- DFDD project: Hengphasatporn K et al., JCIM (2026)
 - Dimorphite-DL: Ropp PJ et al., J Cheminform (2019)
-
-We thank **Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski**
-for developing **pKaPredict** and the study *"Machine Learning Meets pKa"*,
-which inspired **pKaNET-Cloud**.
-
 """)
 
 # Footer
