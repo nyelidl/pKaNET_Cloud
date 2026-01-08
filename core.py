@@ -12,6 +12,9 @@ from dimorphite_dl import protonate_smiles
 from pkapredict import load_model, predict_pKa
 import subprocess
 import shutil
+import pandas as pd
+import numpy as np
+from collections import defaultdict
 
 
 # Check if Open Babel is available
@@ -67,6 +70,102 @@ def convert_pdb_to_mol2_obabel(pdb_path: str, mol2_path: str) -> bool:
 _PKANET_MODEL = None
 _DESCRIPTOR_NAMES = None
 
+# IUPAC dataset (cached)
+_IUPAC_DF = None
+_PKA_MAP_ALL = None
+_IUPAC_LOADED = False
+
+IUPAC_CSV_URL = "https://raw.githubusercontent.com/IUPAC/Dissociation-Constants/main/data/curated/iupac_pka_curated.csv"
+
+
+def _pick_col(df, wanted):
+    """Find column from list of possible names (case-insensitive)"""
+    cols = list(df.columns)
+    lower_map = {c.lower(): c for c in cols}
+    for w in wanted:
+        if w in cols:
+            return w
+        if w.lower() in lower_map:
+            return lower_map[w.lower()]
+    return None
+
+
+def _can_smi(smi):
+    """Convert to canonical SMILES"""
+    try:
+        m = Chem.MolFromSmiles(str(smi).strip())
+        return Chem.MolToSmiles(m, canonical=True) if m else None
+    except:
+        return None
+
+
+def load_iupac_dataset():
+    """Load and index IUPAC pKa dataset"""
+    global _IUPAC_DF, _PKA_MAP_ALL, _IUPAC_LOADED
+    
+    if _IUPAC_LOADED:
+        return
+    
+    print("⏳ Loading IUPAC pKa dataset...")
+    try:
+        _IUPAC_DF = pd.read_csv(IUPAC_CSV_URL)
+        print(f"✓ IUPAC dataset loaded: {len(_IUPAC_DF):,} rows")
+        
+        # Find SMILES and pKa columns
+        smiles_col = _pick_col(_IUPAC_DF, ["SMILES", "smiles"])
+        pka_col = _pick_col(_IUPAC_DF, ["pka_value", "pKa", "pka", "value"])
+        
+        if smiles_col is None or pka_col is None:
+            raise ValueError(f"Cannot find SMILES/pKa columns. Available: {list(_IUPAC_DF.columns)}")
+        
+        # Canonicalize SMILES
+        _IUPAC_DF["_cansmi"] = _IUPAC_DF[smiles_col].apply(_can_smi)
+        
+        # Build lookup map: canonical SMILES → list of pKa values
+        _PKA_MAP_ALL = defaultdict(list)
+        for csmi, pka in zip(_IUPAC_DF["_cansmi"], _IUPAC_DF[pka_col]):
+            if csmi is None:
+                continue
+            try:
+                _PKA_MAP_ALL[csmi].append(float(pka))
+            except:
+                pass
+        
+        print(f"✓ IUPAC indexed molecules: {len(_PKA_MAP_ALL):,}")
+        print(f"  Using columns: {smiles_col} | {pka_col}")
+        _IUPAC_LOADED = True
+        
+    except Exception as e:
+        print(f"⚠️ IUPAC dataset load failed: {e}")
+        print("   Will use pKaPredict only.")
+        _IUPAC_DF = None
+        _PKA_MAP_ALL = defaultdict(list)
+        _IUPAC_LOADED = True
+
+
+def lookup_pka_iupac(query_smiles: str):
+    """
+    Look up pKa in IUPAC dataset.
+    Returns: (median_pka, source_label, n_values) or (None, None, None) if not found
+    """
+    if _PKA_MAP_ALL is None:
+        return None, None, None
+    
+    canonical_query = _can_smi(query_smiles)
+    if not canonical_query:
+        return None, None, None
+    
+    pka_values = _PKA_MAP_ALL.get(canonical_query, [])
+    if not pka_values:
+        return None, None, None
+    
+    pka_values = sorted(pka_values)
+    median_pka = float(np.median(pka_values))
+    n = len(pka_values)
+    
+    return median_pka, f"IUPAC (n={n})", n
+
+
 def get_model():
     global _PKANET_MODEL, _DESCRIPTOR_NAMES
     if _PKANET_MODEL is None:
@@ -75,13 +174,13 @@ def get_model():
         # Get descriptor names from model
         if hasattr(_PKANET_MODEL, 'feature_name_'):
             _DESCRIPTOR_NAMES = _PKANET_MODEL.feature_name_
-            print(f"✓ Model loaded with {len(_DESCRIPTOR_NAMES)} descriptors")
+            print(f"✓ pKaPredict model loaded with {len(_DESCRIPTOR_NAMES)} descriptors")
         else:
             # Fallback: use first N descriptors from RDKit
             from rdkit.Chem import Descriptors
             all_descriptors = [desc[0] for desc in Descriptors._descList]
             _DESCRIPTOR_NAMES = all_descriptors[:_PKANET_MODEL.n_features_]
-            print(f"✓ Model loaded, using {len(_DESCRIPTOR_NAMES)} RDKit descriptors")
+            print(f"✓ pKaPredict model loaded, using {len(_DESCRIPTOR_NAMES)} RDKit descriptors")
     
     return _PKANET_MODEL, _DESCRIPTOR_NAMES
 
@@ -121,6 +220,27 @@ def predict_pka_pkanet(smiles: str) -> float:
     except Exception as e:
         print(f"Error during pKa prediction for SMILES '{smiles}': {e}")
         raise
+
+
+def get_pka_iupac_or_predict(smiles: str):
+    """
+    Get pKa value: IUPAC dataset if matched, otherwise pKaPredict ML
+    
+    Returns:
+        tuple: (pka_value, source_label) where source_label is like "IUPAC (n=5)" or "pKaPredict (ML)"
+    """
+    # First, try IUPAC lookup
+    pka_iupac, source, n = lookup_pka_iupac(smiles)
+    if pka_iupac is not None:
+        return pka_iupac, source
+    
+    # Fall back to ML prediction
+    try:
+        pka_ml = predict_pka_pkanet(smiles)
+        return pka_ml, "pKaPredict (ML)"
+    except Exception as e:
+        print(f"Warning: Both IUPAC and pKaPredict failed: {e}")
+        return None, "N/A"
 
 def ph_adjust_smiles_dimorphite(smiles_str: str, ph: float):
     prot_list = protonate_smiles(smiles_str, ph_min=ph, ph_max=ph, max_variants=1)
@@ -363,6 +483,9 @@ def run_job(
     if output_formats is None or len(output_formats) == 0:
         output_formats = ["PDB"]
     
+    # Load IUPAC dataset (only once)
+    load_iupac_dataset()
+    
     # User-selected formats (SDF is handled separately, always generated)
     formats_to_save = [fmt.upper() for fmt in output_formats]
 
@@ -436,11 +559,13 @@ def run_job(
 
         base_smiles = lig["base_smiles"]
 
-        # Predict pKa with better error handling
+        # Predict pKa: IUPAC if matched, else pKaPredict ML
         pka_pred = None
+        pka_source = "N/A"
         try:
-            pka_pred = predict_pka_pkanet(base_smiles)
-            print(f"pKa prediction for {pretty_name}: {pka_pred:.2f}")
+            pka_pred, pka_source = get_pka_iupac_or_predict(base_smiles)
+            if pka_pred is not None:
+                print(f"pKa for {pretty_name}: {pka_pred:.2f} ({pka_source})")
         except Exception as e:
             print(f"Warning: pKa prediction failed for {pretty_name}: {e}")
             # Add warning to format_warnings
@@ -471,6 +596,7 @@ def run_job(
             "base_smiles": base_smiles,
             "ph_smiles": ph_smiles,
             "pka_pred": pka_pred,
+            "pka_source": pka_source,
             "formal_charge": formal_charge,
         }
         
@@ -496,6 +622,7 @@ def run_job(
     summary_lines.append(f"Target pH: {target_pH}")
     summary_lines.append(f"Stereoisomer enumeration: {'Enabled' if enumerate_stereoisomers else 'Disabled'}")
     summary_lines.append(f"Total structures generated: {len(results)}")
+    summary_lines.append(f"pKa source: IUPAC (if matched) → pKaPredict (ML)")
     summary_lines.append("=" * 80)
     summary_lines.append("")
     
@@ -505,9 +632,14 @@ def run_job(
         summary_lines.append(f"  Base SMILES          : {r['base_smiles']}")
         summary_lines.append(f"  pH-adjusted SMILES   : {r['ph_smiles']}")
         
-        # Format pKa value safely
-        pka_value = f"{r['pka_pred']:.2f}" if r['pka_pred'] is not None else "N/A"
-        summary_lines.append(f"  Predicted pKa        : {pka_value}")
+        # Format pKa value safely with source
+        if r['pka_pred'] is not None:
+            pka_value = f"{r['pka_pred']:.2f}"
+            source = r.get('pka_source', 'N/A')
+            summary_lines.append(f"  Predicted pKa        : {pka_value} ({source})")
+        else:
+            summary_lines.append(f"  Predicted pKa        : N/A")
+        
         summary_lines.append(f"  Formal Charge (pH {target_pH}): {r['formal_charge']:+d}")
         
         # Show what formats were actually generated
@@ -525,7 +657,7 @@ def run_job(
         summary_lines.append("")
     
     summary_lines.append("=" * 80)
-    summary_lines.append("pKa Prediction powered by pKaPredict (ML-based)")
+    summary_lines.append("pKa: IUPAC dataset (if matched) → pKaPredict ML model")
     summary_lines.append("=" * 80)
     
     summary_text = "\n".join(summary_lines).strip()
