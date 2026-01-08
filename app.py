@@ -192,7 +192,8 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
         if result["pka_pred"] is not None:
             st.markdown(f"**Predicted pKa (pKaPredict):** `{result['pka_pred']:.2f}`")
         else:
-            st.markdown(f"**Predicted pKa (pKaPredict):** `N/A`")
+            st.markdown(f"**Predicted pKa (pKaPredict):** `N/A` ⚠️")
+            st.caption("⚠️ pKa prediction unavailable - check warnings below")
         st.markdown(f"**Formal Charge at pH {target_pH}:** `{result['formal_charge']:+d}`")
         # Show stereoisomer info if available
         if "stereoisomer_id" in result:
@@ -310,12 +311,20 @@ if run_btn:
                     
                     # Show format warnings if any
                     if "format_warnings" in out and out["format_warnings"]:
+                        # Separate pKa warnings from format warnings
+                        pka_warnings = [w for w in out["format_warnings"] if "pKa prediction failed" in w]
                         info_warnings = [w for w in out["format_warnings"] if w.startswith("ℹ️")]
-                        error_warnings = [w for w in out["format_warnings"] if not w.startswith("ℹ️")]
+                        other_warnings = [w for w in out["format_warnings"] if w not in pka_warnings and w not in info_warnings]
                         
-                        if error_warnings:
+                        if pka_warnings:
+                            with st.expander("⚠️ pKa Prediction Warnings", expanded=True):
+                                for warning in pka_warnings:
+                                    st.warning(warning)
+                                st.info("💡 **Note:** pKa prediction may fail for certain molecular structures. The pH-adjusted structure and formal charge are still calculated correctly using Dimorphite-DL.")
+                        
+                        if other_warnings:
                             with st.expander("⚠️ Format Warnings", expanded=False):
-                                for warning in error_warnings:
+                                for warning in other_warnings:
                                     st.warning(warning)
                         
                         if info_warnings:
