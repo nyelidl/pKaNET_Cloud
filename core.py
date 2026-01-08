@@ -9,7 +9,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
 from dimorphite_dl import protonate_smiles
-from pkapredict import load_model, smiles_to_rdkit_descriptors, predict_pKa
+from pkapredict import load_model, predict_pKa
 import subprocess
 import shutil
 
@@ -65,12 +65,25 @@ def convert_pdb_to_mol2_obabel(pdb_path: str, mol2_path: str) -> bool:
 
 # Load model once (cached in module)
 _PKANET_MODEL = None
+_DESCRIPTOR_NAMES = None
 
 def get_model():
-    global _PKANET_MODEL
+    global _PKANET_MODEL, _DESCRIPTOR_NAMES
     if _PKANET_MODEL is None:
         _PKANET_MODEL = load_model()
-    return _PKANET_MODEL
+        
+        # Get descriptor names from model
+        if hasattr(_PKANET_MODEL, 'feature_name_'):
+            _DESCRIPTOR_NAMES = _PKANET_MODEL.feature_name_
+            print(f"✓ Model loaded with {len(_DESCRIPTOR_NAMES)} descriptors")
+        else:
+            # Fallback: use first N descriptors from RDKit
+            from rdkit.Chem import Descriptors
+            all_descriptors = [desc[0] for desc in Descriptors._descList]
+            _DESCRIPTOR_NAMES = all_descriptors[:_PKANET_MODEL.n_features_]
+            print(f"✓ Model loaded, using {len(_DESCRIPTOR_NAMES)} RDKit descriptors")
+    
+    return _PKANET_MODEL, _DESCRIPTOR_NAMES
 
 
 def predict_pka_pkanet(smiles: str) -> float:
@@ -89,30 +102,24 @@ def predict_pka_pkanet(smiles: str) -> float:
         raise ValueError("RDKit could not parse SMILES for pKa prediction.")
     
     try:
-        # pKaPredict expects a single SMILES string, not a list
-        # Try different possible API signatures
-        try:
-            # Try passing single SMILES directly
-            desc = smiles_to_rdkit_descriptors(smiles)
-        except:
-            # Try with list format
-            try:
-                desc = smiles_to_rdkit_descriptors([smiles])
-            except:
-                # Try with descriptor_names parameter
-                desc = smiles_to_rdkit_descriptors(smiles, descriptor_names=None)
-    except Exception as e:
-        print(f"Warning: Could not generate descriptors for pKa prediction: {e}")
-        raise
-    
-    try:
-        pka_value = predict_pKa(get_model(), desc)
+        # Get model and descriptor names
+        model, descriptor_names = get_model()
+        
+        # Predict pKa using correct API: predict_pKa(smiles, model, descriptor_names)
+        pka_value = predict_pKa(smiles, model, descriptor_names)
+        
+        print(f"✓ pKa prediction successful: {pka_value:.2f}")
+        
         # Handle both single value and array returns
         if isinstance(pka_value, (list, tuple)):
             pka_value = pka_value[0]
+        elif hasattr(pka_value, '__iter__') and not isinstance(pka_value, str):
+            pka_value = next(iter(pka_value))
+            
         return float(pka_value)
+        
     except Exception as e:
-        print(f"Warning: pKa prediction failed: {e}")
+        print(f"Error during pKa prediction for SMILES '{smiles}': {e}")
         raise
 
 def ph_adjust_smiles_dimorphite(smiles_str: str, ph: float):
