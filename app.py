@@ -446,3 +446,12 @@ st.markdown("""
     For questions: <a href='mailto:kowith@ccs.tsukuba.ac.jp'>kowith@ccs.tsukuba.ac.jp</a></p>
 </div>
 """, unsafe_allow_html=True)
+st.markdown("""
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-LFQ4KX8KV4"></script>
+<script>
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-LFQ4KX8KV4');
+</script>
+""", unsafe_allow_html=True)
