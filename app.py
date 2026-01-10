@@ -446,12 +446,19 @@ st.markdown("""
     For questions: <a href='mailto:kowith@ccs.tsukuba.ac.jp'>kowith@ccs.tsukuba.ac.jp</a></p>
 </div>
 """, unsafe_allow_html=True)
-st.markdown("""
+
+# Google Analytics - MUST use components.html() for scripts to work
+components.html("""
+<!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-LFQ4KX8KV4"></script>
 <script>
-window.dataLayer = window.dataLayer || [];
-function gtag(){dataLayer.push(arguments);}
-gtag('js', new Date());
-gtag('config', 'G-LFQ4KX8KV4');
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-LFQ4KX8KV4', {
+    'page_title': document.title,
+    'page_location': window.location.href,
+    'page_path': window.location.pathname
+  });
 </script>
-""", unsafe_allow_html=True)
+""", height=0, width=0)
