@@ -447,7 +447,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Google Analytics - MUST use components.html() for scripts to work
+# Google Analytics - Using components.html() to execute JavaScript
 components.html("""
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-LFQ4KX8KV4"></script>
@@ -455,10 +455,7 @@ components.html("""
   window.dataLayer = window.dataLayer || [];
   function gtag(){dataLayer.push(arguments);}
   gtag('js', new Date());
-  gtag('config', 'G-LFQ4KX8KV4', {
-    'page_title': document.title,
-    'page_location': window.location.href,
-    'page_path': window.location.pathname
-  });
+  
+  gtag('config', 'G-LFQ4KX8KV4');
 </script>
-""", height=0, width=0)
+""", height=0)
