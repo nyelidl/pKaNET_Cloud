@@ -23,17 +23,20 @@ except (ImportError, OSError) as e:
             return None
     Draw = DrawFallback()
 
-# Check MolScribe availability
+# Check MolScribe availability - Try lightweight API approach first
+MOLSCRIBE_AVAILABLE = False
+MOLSCRIBE_API_AVAILABLE = False
+
 try:
+    # Option 1: Try local MolScribe (requires torch, heavy)
     import huggingface_hub
     from molscribe import MolScribe
     MOLSCRIBE_AVAILABLE = True
-    # Initialize MolScribe model (will be cached)
+    
     @st.cache_resource
     def load_molscribe_model():
         """Load MolScribe model - downloads automatically on first use"""
         try:
-            # Download model from HuggingFace if not already cached
             model_path = huggingface_hub.hf_hub_download(
                 repo_id="yujieq/MolScribe",
                 filename="swin_base_char_aux_1m680k.pth"
@@ -42,11 +45,52 @@ try:
             return model
         except Exception as e:
             st.error(f"Failed to load MolScribe model: {e}")
-            st.info("💡 MolScribe will download the model (~100MB) on first use. This may take a few minutes...")
             raise
 except ImportError as e:
-    MOLSCRIBE_AVAILABLE = False
-    print(f"Warning: MolScribe not available: {e}")
+    print(f"Local MolScribe not available: {e}")
+    # Try API-based approach (lightweight)
+    try:
+        import requests
+        MOLSCRIBE_API_AVAILABLE = True
+        
+        def predict_smiles_from_image_api(image):
+            """Use HuggingFace Inference API for MolScribe (lightweight alternative)"""
+            try:
+                import io
+                import base64
+                from PIL import Image
+                
+                # Convert image to bytes
+                img_byte_arr = io.BytesIO()
+                if isinstance(image, Image.Image):
+                    image.save(img_byte_arr, format='PNG')
+                else:
+                    img_byte_arr = image
+                img_byte_arr.seek(0)
+                
+                # Use HuggingFace Inference API (free tier available)
+                API_URL = "https://api-inference.huggingface.co/models/yujieq/MolScribe"
+                headers = {"Authorization": f"Bearer {st.secrets.get('HF_TOKEN', '')}"} if 'HF_TOKEN' in st.secrets else {}
+                
+                response = requests.post(API_URL, headers=headers, data=img_byte_arr.read(), timeout=30)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    # MolScribe API returns SMILES in the response
+                    if isinstance(result, list) and len(result) > 0:
+                        return result[0].get('generated_text', None)
+                    elif isinstance(result, dict):
+                        return result.get('generated_text', None) or result.get('smiles', None)
+                else:
+                    print(f"API request failed: {response.status_code} - {response.text}")
+                    return None
+                    
+            except Exception as e:
+                print(f"API prediction failed: {e}")
+                return None
+                
+    except ImportError:
+        print("Requests library not available for API calls")
 
 st.set_page_config(page_title="pKaNET Cloud", layout="wide", page_icon="🧪")
 
@@ -157,9 +201,15 @@ if input_type == "SMILES":
     )
 
 elif input_type == "IMAGE":
-    if not MOLSCRIBE_AVAILABLE:
-        st.error("❌ MolScribe is not installed. Please install it with: `pip install molscribe`")
-        st.info("📦 MolScribe converts chemical structure images to SMILES using deep learning.")
+    if not MOLSCRIBE_AVAILABLE and not MOLSCRIBE_API_AVAILABLE:
+        st.error("❌ MolScribe is not available.")
+        st.info("📦 For Streamlit Cloud, you can use the lightweight API mode by adding a HuggingFace token to Secrets.")
+        st.markdown("""
+        **Setup Instructions:**
+        1. Get a free token from [HuggingFace](https://huggingface.co/settings/tokens)
+        2. Add to Streamlit Secrets: `HF_TOKEN = "your_token_here"`
+        3. Alternatively, install full version locally: `pip install molscribe torch torchvision`
+        """)
     else:
         st.info("📸 Upload an image of a chemical structure (hand-drawn or printed)")
         image_input = st.file_uploader(
@@ -179,11 +229,18 @@ elif input_type == "IMAGE":
             with col2:
                 with st.spinner("🔍 Converting image to SMILES with MolScribe..."):
                     try:
-                        # Convert to SMILES using MolScribe
-                        model = load_molscribe_model()
+                        predicted_smiles = None
                         
-                        # MolScribe expects PIL Image or file path
-                        predicted_smiles = model.predict_image(img)
+                        # Try local model first, then API
+                        if MOLSCRIBE_AVAILABLE:
+                            model = load_molscribe_model()
+                            predicted_smiles = model.predict_image(img)
+                        elif MOLSCRIBE_API_AVAILABLE:
+                            image_input.seek(0)  # Reset file pointer
+                            predicted_smiles = predict_smiles_from_image_api(image_input)
+                            
+                            if predicted_smiles is None:
+                                st.warning("⏳ HuggingFace API is loading the model. This may take 1-2 minutes on first use. Please wait and try again...")
                         
                         if predicted_smiles:
                             st.success("✅ Structure recognized!")
@@ -205,9 +262,15 @@ elif input_type == "IMAGE":
                         st.info("💡 Tips: Ensure the image is clear, well-lit, and the structure is clearly visible.")
 
 elif input_type == "CAMERA":
-    if not MOLSCRIBE_AVAILABLE:
-        st.error("❌ MolScribe is not installed. Please install it with: `pip install molscribe`")
-        st.info("📦 MolScribe converts chemical structure images to SMILES using deep learning.")
+    if not MOLSCRIBE_AVAILABLE and not MOLSCRIBE_API_AVAILABLE:
+        st.error("❌ MolScribe is not available.")
+        st.info("📦 For Streamlit Cloud, you can use the lightweight API mode by adding a HuggingFace token to Secrets.")
+        st.markdown("""
+        **Setup Instructions:**
+        1. Get a free token from [HuggingFace](https://huggingface.co/settings/tokens)
+        2. Add to Streamlit Secrets: `HF_TOKEN = "your_token_here"`
+        3. Alternatively, install full version locally: `pip install molscribe torch torchvision`
+        """)
     else:
         st.info("📱 Take a photo of a chemical structure using your device camera")
         camera_image = st.camera_input(
@@ -226,11 +289,18 @@ elif input_type == "CAMERA":
             with col2:
                 with st.spinner("🔍 Converting image to SMILES with MolScribe..."):
                     try:
-                        # Convert to SMILES using MolScribe
-                        model = load_molscribe_model()
+                        predicted_smiles = None
                         
-                        # MolScribe expects PIL Image or file path
-                        predicted_smiles = model.predict_image(img)
+                        # Try local model first, then API
+                        if MOLSCRIBE_AVAILABLE:
+                            model = load_molscribe_model()
+                            predicted_smiles = model.predict_image(img)
+                        elif MOLSCRIBE_API_AVAILABLE:
+                            camera_image.seek(0)  # Reset file pointer
+                            predicted_smiles = predict_smiles_from_image_api(camera_image)
+                            
+                            if predicted_smiles is None:
+                                st.warning("⏳ HuggingFace API is loading the model. This may take 1-2 minutes on first use. Please wait and try again...")
                         
                         if predicted_smiles:
                             st.success("✅ Structure recognized!")
