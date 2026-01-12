@@ -6,6 +6,7 @@ import streamlit.components.v1 as components
 from rdkit import Chem
 from rdkit.Chem import AllChem
 import io
+from PIL import Image
 
 # Fix for RDKit Draw on headless servers
 try:
@@ -21,6 +22,18 @@ except (ImportError, OSError) as e:
         def MolToImage(*args, **kwargs):
             return None
     Draw = DrawFallback()
+
+# Check MolScribe availability
+try:
+    from molscribe import MolScribe
+    MOLSCRIBE_AVAILABLE = True
+    # Initialize MolScribe model (will be cached)
+    @st.cache_resource
+    def load_molscribe_model():
+        return MolScribe()
+except ImportError:
+    MOLSCRIBE_AVAILABLE = False
+    print("Warning: MolScribe not available. Install with: pip install molscribe")
 
 st.set_page_config(page_title="pKaNET Cloud", layout="wide", page_icon="🧪")
 
@@ -48,6 +61,12 @@ st.markdown("""
     .stDownloadButton button {
         width: 100%;
     }
+    .image-preview {
+        border: 2px solid #1f77b4;
+        border-radius: 0.5rem;
+        padding: 0.5rem;
+        margin: 1rem 0;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -73,9 +92,13 @@ st.markdown(
 
 # Sidebar configuration
 st.sidebar.header("⚙️ Input / Options")
-input_type = st.sidebar.selectbox("Input type", ["SMILES", "SMI_FILE", "FILE"])
+input_type = st.sidebar.selectbox(
+    "Input type", 
+    ["SMILES", "IMAGE", "CAMERA", "SMI_FILE", "FILE"],
+    help="Choose how to provide your molecule structure"
+)
 target_pH = st.sidebar.slider("Target pH", 2.0, 12.0, 7.0, 0.1)
-output_name = st.sidebar.text_input("Output name (for single SMILES/FILE)", value="ligand")
+output_name = st.sidebar.text_input("Output name (for single SMILES/FILE/IMAGE)", value="ligand")
 
 # Add stereoisomer enumeration option
 st.sidebar.header("🧬 Stereochemistry")
@@ -109,6 +132,8 @@ viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 300, 50)
 
 smiles_text = None
 uploaded = None
+image_input = None
+camera_image = None
 
 # Input section
 if input_type == "SMILES":
@@ -118,19 +143,114 @@ if input_type == "SMILES":
         placeholder="Paste a SMILES here:",
     )
 
+elif input_type == "IMAGE":
+    if not MOLSCRIBE_AVAILABLE:
+        st.error("❌ MolScribe is not installed. Please install it with: `pip install molscribe`")
+        st.info("📦 MolScribe converts chemical structure images to SMILES using deep learning.")
+    else:
+        st.info("📸 Upload an image of a chemical structure (hand-drawn or printed)")
+        image_input = st.file_uploader(
+            "Upload chemical structure image",
+            type=["png", "jpg", "jpeg", "bmp", "tiff"],
+            help="Upload a clear image of a chemical structure"
+        )
+        
+        if image_input:
+            # Display uploaded image
+            img = Image.open(image_input)
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.markdown("**Uploaded Image:**")
+                st.image(img, use_container_width=True)
+            
+            with col2:
+                with st.spinner("🔍 Converting image to SMILES with MolScribe..."):
+                    try:
+                        # Convert to SMILES using MolScribe
+                        model = load_molscribe_model()
+                        
+                        # MolScribe expects PIL Image or file path
+                        predicted_smiles = model.predict_image(img)
+                        
+                        if predicted_smiles:
+                            st.success("✅ Structure recognized!")
+                            st.markdown(f"**Detected SMILES:** `{predicted_smiles}`")
+                            
+                            # Validate SMILES
+                            mol = Chem.MolFromSmiles(predicted_smiles)
+                            if mol:
+                                st.success("✅ Valid SMILES structure")
+                                # Store for processing
+                                smiles_text = predicted_smiles
+                            else:
+                                st.error("❌ Invalid SMILES generated. Please try another image.")
+                        else:
+                            st.error("❌ Could not recognize structure. Please try a clearer image.")
+                    
+                    except Exception as e:
+                        st.error(f"❌ Error during image recognition: {e}")
+                        st.info("💡 Tips: Ensure the image is clear, well-lit, and the structure is clearly visible.")
+
+elif input_type == "CAMERA":
+    if not MOLSCRIBE_AVAILABLE:
+        st.error("❌ MolScribe is not installed. Please install it with: `pip install molscribe`")
+        st.info("📦 MolScribe converts chemical structure images to SMILES using deep learning.")
+    else:
+        st.info("📱 Take a photo of a chemical structure using your device camera")
+        camera_image = st.camera_input(
+            "Take a photo of chemical structure",
+            help="Point your camera at a chemical structure (hand-drawn or printed)"
+        )
+        
+        if camera_image:
+            # Display captured image
+            img = Image.open(camera_image)
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.markdown("**Captured Image:**")
+                st.image(img, use_container_width=True)
+            
+            with col2:
+                with st.spinner("🔍 Converting image to SMILES with MolScribe..."):
+                    try:
+                        # Convert to SMILES using MolScribe
+                        model = load_molscribe_model()
+                        
+                        # MolScribe expects PIL Image or file path
+                        predicted_smiles = model.predict_image(img)
+                        
+                        if predicted_smiles:
+                            st.success("✅ Structure recognized!")
+                            st.markdown(f"**Detected SMILES:** `{predicted_smiles}`")
+                            
+                            # Validate SMILES
+                            mol = Chem.MolFromSmiles(predicted_smiles)
+                            if mol:
+                                st.success("✅ Valid SMILES structure")
+                                # Store for processing
+                                smiles_text = predicted_smiles
+                            else:
+                                st.error("❌ Invalid SMILES generated. Please try another photo.")
+                        else:
+                            st.error("❌ Could not recognize structure. Please try taking another photo.")
+                    
+                    except Exception as e:
+                        st.error(f"❌ Error during image recognition: {e}")
+                        st.info("💡 Tips: Ensure good lighting, hold camera steady, and keep structure clearly visible.")
+
 elif input_type == "SMI_FILE":
     uploaded = st.file_uploader(
         "Upload .smi (SMILES [name] per line)",
         type=["smi", "txt"],
     )
-    st.info("📝 Format: `SMILES [optional_name]` per line")
+    st.info("📋 Format: `SMILES [optional_name]` per line")
 
-else:
+else:  # FILE
     uploaded = st.file_uploader(
         "Upload ligand file",
         type=["pdb", "mol2", "sdf"],
     )
-    st.info("📝 Supported formats: PDB, MOL2, SDF")
+    st.info("📋 Supported formats: PDB, MOL2, SDF")
 
 
 # Helper function for 2D visualization
@@ -281,6 +401,10 @@ if run_btn:
     # Validation
     if input_type == "SMILES" and not smiles_text:
         st.error("⚠️ Please enter a SMILES string")
+    elif input_type == "IMAGE" and not image_input:
+        st.error("⚠️ Please upload an image")
+    elif input_type == "CAMERA" and not camera_image:
+        st.error("⚠️ Please take a photo")
     elif input_type in ["SMI_FILE", "FILE"] and not uploaded:
         st.error("⚠️ Please upload a file")
     elif not output_formats:
@@ -296,7 +420,7 @@ if run_btn:
 
                     out_dir = tmp / "out"
                     out = run_job(
-                        input_type=input_type,
+                        input_type="SMILES" if input_type in ["IMAGE", "CAMERA"] else input_type,
                         smiles_text=smiles_text,
                         uploaded_bytes=uploaded_bytes,
                         uploaded_name=uploaded_name,
@@ -420,6 +544,7 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ℹ️ About")
 st.sidebar.info("""
 **pKaNET Cloud** uses:
+- **MolScribe** for image-to-SMILES conversion
 - **pKaPredict** for ML-based pKa prediction
 - **Dimorphite-DL** for pH-dependent protonation
 - **RDKit** for 3D structure generation
@@ -431,6 +556,7 @@ st.sidebar.markdown("""
 If you use this tool, please cite:
 - DFDD project: Hengphasatporn K., Duan L., Harada R., Shigeta Y. JCIM (2026)
 - Dimorphite-DL: Ropp PJ et al., J Cheminform (2019)
+- MolScribe: Qian Y et al., Nat Commun (2023)
 
 We thank **Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski**
 for developing **pKaPredict** and the study *"Machine Learning Meets pKa"*,
@@ -446,16 +572,3 @@ st.markdown("""
     For questions: <a href='mailto:kowith@ccs.tsukuba.ac.jp'>kowith@ccs.tsukuba.ac.jp</a></p>
 </div>
 """, unsafe_allow_html=True)
-
-# Google Analytics - Using components.html() to execute JavaScript
-components.html("""
-<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-LFQ4KX8KV4"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-  
-  gtag('config', 'G-LFQ4KX8KV4');
-</script>
-""", height=0)
