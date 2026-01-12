@@ -25,15 +25,28 @@ except (ImportError, OSError) as e:
 
 # Check MolScribe availability
 try:
+    import huggingface_hub
     from molscribe import MolScribe
     MOLSCRIBE_AVAILABLE = True
     # Initialize MolScribe model (will be cached)
     @st.cache_resource
     def load_molscribe_model():
-        return MolScribe()
-except ImportError:
+        """Load MolScribe model - downloads automatically on first use"""
+        try:
+            # Download model from HuggingFace if not already cached
+            model_path = huggingface_hub.hf_hub_download(
+                repo_id="yujieq/MolScribe",
+                filename="swin_base_char_aux_1m680k.pth"
+            )
+            model = MolScribe(model_path)
+            return model
+        except Exception as e:
+            st.error(f"Failed to load MolScribe model: {e}")
+            st.info("💡 MolScribe will download the model (~100MB) on first use. This may take a few minutes...")
+            raise
+except ImportError as e:
     MOLSCRIBE_AVAILABLE = False
-    print("Warning: MolScribe not available. Install with: pip install molscribe")
+    print(f"Warning: MolScribe not available: {e}")
 
 st.set_page_config(page_title="pKaNET Cloud", layout="wide", page_icon="🧪")
 
