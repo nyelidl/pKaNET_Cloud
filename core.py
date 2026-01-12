@@ -773,28 +773,47 @@ def zip_minimized_structures(out_dir: str, zip_path: str, selected_formats: List
     out = Path(out_dir)
     zp = Path(zip_path)
     
-    # Convert to lowercase for comparison
     formats_lower = [fmt.lower() for fmt in selected_formats]
     
+    file_count = 0
     with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
         for p in out.glob("*_min.*"):
             suffix = p.suffix.lower()
-            # Only include user-selected formats, exclude .sdf
             if suffix == ".pdb" and "pdb" in formats_lower:
                 z.write(p, arcname=p.name)
+                file_count += 1
             elif suffix == ".mol2" and "mol2" in formats_lower:
                 z.write(p, arcname=p.name)
+                file_count += 1
+    
+    if file_count == 0:
+        raise ValueError("No structure files found to zip")
     
     return str(zp)
-                     
+
+
 def zip_all_outputs(out_dir: str, zip_path: str) -> str:
     """
-    Zip all output files including structures, logs, summaries, and 2D structure PNGs
+    Zip all output files including structures, logs, summaries, and 2D images
+    
+    Args:
+        out_dir: Output directory
+        zip_path: Path for output zip file
+    
+    Returns:
+        Path to created zip file
     """
     out = Path(out_dir)
     zp = Path(zip_path)
+    
+    file_count = 0
     with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
         for p in out.rglob("*"):
             if p.is_file():
                 z.write(p, arcname=p.relative_to(out))
+                file_count += 1
+    
+    if file_count == 0:
+        raise ValueError("No files found to zip")
+    
     return str(zp)
