@@ -122,16 +122,51 @@ def predict_pka_pkanet(smiles: str) -> float:
         print(f"Error during pKa prediction for SMILES '{smiles}': {e}")
         raise
 
+def _has_acidic_group(mol: Chem.Mol) -> bool:
+    # carboxylic acid / sulfonic acid / phosphoric acid patterns (simple + robust)
+    acid_smarts = [
+        "C(=O)[O;H1]",          # COOH
+        "S(=O)(=O)[O;H1]",      # SO3H
+        "P(=O)(O)(O)O",         # phosphoric acid (rough)
+    ]
+    return any(mol.HasSubstructMatch(Chem.MolFromSmarts(s)) for s in acid_smarts)
+
 def ph_adjust_smiles_dimorphite(smiles_str: str, ph: float):
-    prot_list = protonate_smiles(smiles_str, ph_min=ph, ph_max=ph, max_variants=1)
+    # Ask for more than 1 candidate (your current max_variants=1 is the bug)
+    prot_list = protonate_smiles(smiles_str, ph_min=ph, ph_max=ph, max_variants=32)
     if not prot_list:
         raise ValueError("Dimorphite-DL returned no protonation state.")
-    ph_smiles = prot_list[0]
-    mol = Chem.MolFromSmiles(ph_smiles)
-    if mol is None:
-        raise ValueError("RDKit could not parse Dimorphite-DL SMILES.")
-    q = Chem.GetFormalCharge(mol)
+
+    candidates = []
+    for smi in prot_list:
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            continue
+        q = Chem.GetFormalCharge(mol)
+        candidates.append((smi, q, mol))
+
+    if not candidates:
+        raise ValueError("RDKit could not parse any Dimorphite-DL SMILES.")
+
+    # --- Chemistry sanity filter ---
+    # If there is NO acidic group, negative total charge is almost always an artifact.
+    # (e.g., lidocaine should be 0 or +1, not -1)
+    filtered = []
+    for smi, q, mol in candidates:
+        if (q < 0) and (not _has_acidic_group(mol)):
+            continue
+        filtered.append((smi, q, mol))
+
+    if not filtered:
+        filtered = candidates  # fall back (don't crash)
+
+    # Pick a sensible default:
+    # - at high pH, prefer neutral (charge closest to 0)
+    # - if tie, prefer smallest |charge|
+    filtered.sort(key=lambda x: (abs(x[1]),))
+    ph_smiles, q, _ = filtered[0]
     return ph_smiles, q
+
 
 def build_minimized_3d(smiles: str):
     mol = Chem.MolFromSmiles(smiles)
