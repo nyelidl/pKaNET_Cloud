@@ -9,3 +9,4 @@ openbabel-wheel
 molscribe
 torch
 torchvision
+huggingface_hub
