@@ -84,7 +84,6 @@ Important Notes
 
 Citation
 --------
-This code is part of the DFDD project.
 If you use pKaNET Cloud in your research, please cite:
 
 DFDD project: 

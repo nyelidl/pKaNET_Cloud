@@ -6,7 +6,3 @@ numpy
 pandas
 pillow
 openbabel-wheel
-molscribe
-torch
-torchvision
-huggingface_hub
