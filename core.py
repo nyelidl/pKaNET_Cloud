@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 import os
 import zipfile
-import tempfile
 from typing import Optional, Dict, Any, List, Tuple
 
 from rdkit import Chem
@@ -62,80 +61,6 @@ def convert_pdb_to_mol2_obabel(pdb_path: str, mol2_path: str) -> bool:
     except Exception as e:
         print(f"Open Babel conversion error: {e}")
         return False
-
-
-def read_mol2_with_fallback(mol2_path: str):
-    """
-    Read MOL2 file with multiple fallback strategies.
-    
-    Args:
-        mol2_path: Path to MOL2 file
-    
-    Returns:
-        RDKit molecule object or None
-    """
-    # Try 1: Standard RDKit MOL2 reader
-    try:
-        mol = Chem.MolFromMol2File(mol2_path, removeHs=False, sanitize=False)
-        if mol is not None:
-            print("✓ MOL2 parsed with standard RDKit reader")
-            return mol
-    except Exception as e:
-        print(f"⚠️ Standard MOL2 reader failed: {e}")
-    
-    # Try 2: Convert MOL2 to SDF using Open Babel, then read SDF
-    if check_obabel():
-        try:
-            with tempfile.NamedTemporaryFile(suffix='.sdf', delete=False) as tmp_sdf:
-                tmp_sdf_path = tmp_sdf.name
-            
-            result = subprocess.run(
-                ["obabel", mol2_path, "-O", tmp_sdf_path],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            
-            if result.returncode == 0:
-                supplier = Chem.SDMolSupplier(tmp_sdf_path, removeHs=False, sanitize=False)
-                mol = next((m for m in supplier if m is not None), None)
-                
-                # Clean up temp file
-                try:
-                    os.unlink(tmp_sdf_path)
-                except:
-                    pass
-                
-                if mol is not None:
-                    print("✓ MOL2 converted to SDF via Open Babel and parsed")
-                    return mol
-        except Exception as e:
-            print(f"⚠️ Open Babel MOL2→SDF conversion failed: {e}")
-    
-    # Try 3: Read as text and try to extract SMILES from @<TRIPOS>MOLECULE section
-    try:
-        with open(mol2_path, 'r') as f:
-            content = f.read()
-        
-        # Some MOL2 files have molecule name that might be a SMILES
-        lines = content.split('\n')
-        in_molecule = False
-        for i, line in enumerate(lines):
-            if '@<TRIPOS>MOLECULE' in line:
-                in_molecule = True
-                continue
-            if in_molecule and line.strip():
-                # Try parsing the molecule name as SMILES
-                potential_smiles = line.strip()
-                mol = Chem.MolFromSmiles(potential_smiles)
-                if mol is not None:
-                    print(f"✓ Extracted SMILES from MOL2: {potential_smiles}")
-                    return mol
-                break
-    except Exception as e:
-        print(f"⚠️ MOL2 text parsing failed: {e}")
-    
-    return None
 
 
 # Load model once (cached in module)
@@ -209,17 +134,11 @@ def ph_adjust_smiles_dimorphite(smiles_str: str, ph: float):
     return ph_smiles, q
 
 def build_minimized_3d(smiles: str):
-    """
-    Build 3D structure from SMILES with multiple fallback strategies.
-    Handles problematic molecules that cause RDKit embedding failures.
-    """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError("RDKit could not parse SMILES for 3D build.")
-    
     mol = Chem.AddHs(mol)
-    
-    # Strategy 1: Try ETKDG with standard parameters
+
     code = -1
     try:
         try:
@@ -228,118 +147,21 @@ def build_minimized_3d(smiles: str):
             params = AllChem.ETKDG()
         params.randomSeed = 0xF00D
         code = AllChem.EmbedMolecule(mol, params)
-        if code == 0 and mol.GetNumConformers() > 0:
-            print("✓ 3D embedding successful (ETKDG)")
-    except Exception as e:
-        print(f"⚠️ ETKDG embedding failed: {e}")
-        code = -1
-    
-    # Strategy 2: Try basic embedding with more attempts
+    except Exception:
+        code = AllChem.EmbedMolecule(mol, randomSeed=0xF00D, maxAttempts=2000)
+
     if code != 0 or mol.GetNumConformers() == 0:
-        try:
-            print("⚠️ Trying basic embedding with maxAttempts=5000...")
-            code = AllChem.EmbedMolecule(mol, randomSeed=0xF00D, maxAttempts=5000)
-            if code == 0 and mol.GetNumConformers() > 0:
-                print("✓ 3D embedding successful (basic method)")
-        except Exception as e:
-            print(f"⚠️ Basic embedding failed: {e}")
-            code = -1
-    
-    # Strategy 3: Try random coordinates
-    if code != 0 or mol.GetNumConformers() == 0:
-        try:
-            print("⚠️ Trying random coordinates embedding...")
-            code = AllChem.EmbedMolecule(mol, useRandomCoords=True, randomSeed=0xF00D, maxAttempts=5000)
-            if code == 0 and mol.GetNumConformers() > 0:
-                print("✓ 3D embedding successful (random coords)")
-        except Exception as e:
-            print(f"⚠️ Random coords embedding failed: {e}")
-            code = -1
-    
-    # Strategy 4: Try with enforceChirality=False (relaxes stereochemistry constraints)
-    if code != 0 or mol.GetNumConformers() == 0:
-        try:
-            print("⚠️ Trying embedding without chirality enforcement...")
-            try:
-                params = AllChem.ETKDGv3()
-            except AttributeError:
-                params = AllChem.ETKDG()
-            params.randomSeed = 0xF00D
-            params.enforceChirality = False
-            code = AllChem.EmbedMolecule(mol, params)
-            if code == 0 and mol.GetNumConformers() > 0:
-                print("✓ 3D embedding successful (no chirality)")
-        except Exception as e:
-            print(f"⚠️ No-chirality embedding failed: {e}")
-            code = -1
-    
-    # Strategy 5: Remove hydrogens and try simpler embedding
-    if code != 0 or mol.GetNumConformers() == 0:
-        try:
-            print("⚠️ Trying embedding without explicit hydrogens...")
-            mol_no_h = Chem.RemoveHs(mol)
-            code = AllChem.EmbedMolecule(mol_no_h, randomSeed=0xF00D, maxAttempts=5000)
-            if code == 0 and mol_no_h.GetNumConformers() > 0:
-                # Add hydrogens back
-                mol = Chem.AddHs(mol_no_h, addCoords=True)
-                print("✓ 3D embedding successful (without H, then added back)")
-        except Exception as e:
-            print(f"⚠️ No-H embedding failed: {e}")
-            code = -1
-    
-    # Strategy 6: Last resort - very simple 2D to 3D conversion
-    if code != 0 or mol.GetNumConformers() == 0:
-        try:
-            print("⚠️ Last resort: simple 2D→3D conversion...")
-            mol_simple = Chem.RemoveHs(mol)
-            AllChem.Compute2DCoords(mol_simple)
-            
-            # Create a simple 3D structure by adding z-coordinates
-            conf = mol_simple.GetConformer()
-            for i in range(mol_simple.GetNumAtoms()):
-                pos = conf.GetAtomPosition(i)
-                # Set z-coordinate to 0 for a planar structure
-                conf.SetAtomPosition(i, (pos.x, pos.y, 0.0))
-            
-            mol = Chem.AddHs(mol_simple, addCoords=True)
-            
-            if mol.GetNumConformers() > 0:
-                print("✓ Generated planar 3D structure (2D→3D)")
-            else:
-                raise ValueError("Even 2D→3D conversion failed")
-        except Exception as e:
-            print(f"⚠️ 2D→3D conversion failed: {e}")
-            raise ValueError(
-                "3D embedding failed with all methods. "
-                "The molecule may be too complex or have geometric constraints that cannot be satisfied. "
-                "Try simplifying the structure or providing a different input format."
-            )
-    
-    # Final check
-    if mol.GetNumConformers() == 0:
-        raise ValueError(
-            "3D embedding failed - no conformer generated. "
-            "The molecule structure may have impossible geometric constraints."
-        )
-    
-    # Geometry optimization
+        code2 = AllChem.EmbedMolecule(mol, useRandomCoords=True, randomSeed=0xF00D, maxAttempts=2000)
+        if code2 != 0 or mol.GetNumConformers() == 0:
+            raise ValueError("3D embedding failed (no conformer).")
+
     try:
         if AllChem.MMFFHasAllMoleculeParams(mol):
-            result = AllChem.MMFFOptimizeMolecule(mol, maxIters=500)
-            if result == 0:
-                print("✓ MMFF optimization converged")
-            else:
-                print(f"⚠️ MMFF optimization did not fully converge (code: {result})")
+            AllChem.MMFFOptimizeMolecule(mol, maxIters=500)
         else:
-            print("⚠️ MMFF parameters unavailable, using UFF...")
-            result = AllChem.UFFOptimizeMolecule(mol, maxIters=500)
-            if result == 0:
-                print("✓ UFF optimization converged")
-            else:
-                print(f"⚠️ UFF optimization did not fully converge (code: {result})")
-    except Exception as e:
-        print(f"⚠️ Minimization failed ({e}), keeping embedded structure")
-    
+            AllChem.UFFOptimizeMolecule(mol, maxIters=500)
+    except Exception:
+        pass
     return mol
 
 def parse_smi_lines(text: str):
@@ -567,71 +389,29 @@ def run_job(
         tmp_path.write_bytes(uploaded_bytes)
 
         mol_in = None
-        parse_error = None
-        
-        try:
-            if ext == ".pdb":
-                mol_in = Chem.MolFromPDBFile(str(tmp_path), removeHs=False, sanitize=False)
-                if mol_in is None:
-                    parse_error = "PDB file could not be parsed by RDKit"
-                    
-            elif ext == ".mol2":
-                mol_in = read_mol2_with_fallback(str(tmp_path))
-                if mol_in is None:
-                    parse_error = (
-                        "MOL2 file could not be parsed. "
-                        "Try converting to SDF or PDB format first, or provide a SMILES string instead."
-                    )
-                    
-            elif ext == ".sdf":
-                supplier = Chem.SDMolSupplier(str(tmp_path), removeHs=False, sanitize=False)
-                mol_in = next((m for m in supplier if m is not None), None)
-                if mol_in is None:
-                    parse_error = "SDF file could not be parsed by RDKit"
-            else:
-                raise ValueError("Unsupported file type. Use .pdb, .mol2, or .sdf")
-        
-        except Exception as e:
-            raise ValueError(f"Error reading {ext} file: {str(e)}")
+        if ext == ".pdb":
+            mol_in = Chem.MolFromPDBFile(str(tmp_path), removeHs=False, sanitize=False)
+        elif ext == ".mol2":
+            mol_in = Chem.MolFromMol2File(str(tmp_path), removeHs=False, sanitize=False)
+        elif ext == ".sdf":
+            supplier = Chem.SDMolSupplier(str(tmp_path), removeHs=False, sanitize=False)
+            mol_in = next((m for m in supplier if m is not None), None)
+        else:
+            raise ValueError("Unsupported file type. Use .pdb, .mol2, or .sdf")
 
         if mol_in is None:
-            error_msg = parse_error or "RDKit could not parse uploaded ligand."
-            
-            # Provide helpful suggestions
-            suggestions = [
-                "\n\nTroubleshooting suggestions:",
-                "\n1. Try converting your file to SDF or PDB format using another tool",
-                "\n2. Use a chemical structure editor to export the molecule",
-                "\n3. Provide the SMILES string directly instead of a file",
-            ]
-            
-            if ext == ".mol2" and not check_obabel():
-                suggestions.append("\n4. The server doesn't have Open Babel installed for MOL2 conversion")
-            
-            raise ValueError(error_msg + "".join(suggestions))
+            raise ValueError("RDKit could not parse uploaded ligand.")
 
-        # Fragment handling and sanitization
         try:
             frags = Chem.GetMolFrags(mol_in, asMols=True, sanitizeFrags=False)
             if len(frags) > 1:
-                print(f"⚠️ Found {len(frags)} fragments, keeping largest")
                 mol_in = max(frags, key=lambda m: m.GetNumHeavyAtoms())
             Chem.SanitizeMol(mol_in)
-        except Exception as e:
-            print(f"⚠️ Sanitization warning (continuing): {e}")
-            # Try to continue even if sanitization fails
+        except Exception:
             pass
 
-        # Convert to SMILES
-        try:
-            base_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol_in), canonical=True)
-        except Exception as e:
-            raise ValueError(f"Could not generate SMILES from uploaded structure: {str(e)}")
-        
-        ligands_raw.append({
-            "name": output_name or os.path.splitext(uploaded_name)[0], 
-            "base_smiles": base_smiles
-        })
+        base_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol_in), canonical=True)
+        ligands_raw.append({"name": output_name or os.path.splitext(uploaded_name)[0], "base_smiles": base_smiles})
 
     else:
         raise ValueError("Unknown input_type")
