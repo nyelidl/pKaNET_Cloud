@@ -130,7 +130,7 @@ else:
         "Upload ligand file",
         type=["pdb", "mol2", "sdf"],
     )
-    st.info("📝 Supported formats: PDB, MOL2, SDF")
+    st.info("📝 Supported formats: PDB")
 
 
 # Helper function for 2D visualization
