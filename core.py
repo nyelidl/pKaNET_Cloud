@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import os
 import zipfile
+import tempfile
 from typing import Optional, Dict, Any, List, Tuple
 
 from rdkit import Chem
@@ -62,6 +63,7 @@ def convert_pdb_to_mol2_obabel(pdb_path: str, mol2_path: str) -> bool:
         print(f"Open Babel conversion error: {e}")
         return False
 
+
 def read_mol2_with_fallback(mol2_path: str):
     """
     Read MOL2 file with multiple fallback strategies.
@@ -84,7 +86,6 @@ def read_mol2_with_fallback(mol2_path: str):
     # Try 2: Convert MOL2 to SDF using Open Babel, then read SDF
     if check_obabel():
         try:
-            import tempfile
             with tempfile.NamedTemporaryFile(suffix='.sdf', delete=False) as tmp_sdf:
                 tmp_sdf_path = tmp_sdf.name
             
@@ -136,82 +137,6 @@ def read_mol2_with_fallback(mol2_path: str):
     
     return None
 
-
-# Replace the FILE input handling section in run_job() with this:
-
-elif input_type == "FILE":
-    if not uploaded_bytes or not uploaded_name:
-        raise ValueError("No ligand file uploaded.")
-    ext = os.path.splitext(uploaded_name)[1].lower()
-    tmp_path = out / f"uploaded{ext}"
-    tmp_path.write_bytes(uploaded_bytes)
-
-    mol_in = None
-    parse_error = None
-    
-    try:
-        if ext == ".pdb":
-            mol_in = Chem.MolFromPDBFile(str(tmp_path), removeHs=False, sanitize=False)
-            if mol_in is None:
-                parse_error = "PDB file could not be parsed by RDKit"
-                
-        elif ext == ".mol2":
-            mol_in = read_mol2_with_fallback(str(tmp_path))
-            if mol_in is None:
-                parse_error = (
-                    "MOL2 file could not be parsed. "
-                    "Try converting to SDF or PDB format first, or provide a SMILES string instead."
-                )
-                
-        elif ext == ".sdf":
-            supplier = Chem.SDMolSupplier(str(tmp_path), removeHs=False, sanitize=False)
-            mol_in = next((m for m in supplier if m is not None), None)
-            if mol_in is None:
-                parse_error = "SDF file could not be parsed by RDKit"
-        else:
-            raise ValueError("Unsupported file type. Use .pdb, .mol2, or .sdf")
-    
-    except Exception as e:
-        raise ValueError(f"Error reading {ext} file: {str(e)}")
-
-    if mol_in is None:
-        error_msg = parse_error or "RDKit could not parse uploaded ligand."
-        
-        # Provide helpful suggestions
-        suggestions = [
-            "\n\nTroubleshooting suggestions:",
-            "1. Try converting your MOL2 file to SDF or PDB format using another tool",
-            "2. Use a chemical structure editor to export the molecule",
-            "3. Provide the SMILES string directly instead of a file",
-        ]
-        
-        if ext == ".mol2" and not check_obabel():
-            suggestions.append("4. The server doesn't have Open Babel installed for MOL2 conversion")
-        
-        raise ValueError(error_msg + "".join(suggestions))
-
-    # Fragment handling and sanitization
-    try:
-        frags = Chem.GetMolFrags(mol_in, asMols=True, sanitizeFrags=False)
-        if len(frags) > 1:
-            print(f"⚠️ Found {len(frags)} fragments, keeping largest")
-            mol_in = max(frags, key=lambda m: m.GetNumHeavyAtoms())
-        Chem.SanitizeMol(mol_in)
-    except Exception as e:
-        print(f"⚠️ Sanitization warning (continuing): {e}")
-        # Try to continue even if sanitization fails
-        pass
-
-    # Convert to SMILES
-    try:
-        base_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol_in), canonical=True)
-    except Exception as e:
-        raise ValueError(f"Could not generate SMILES from uploaded structure: {str(e)}")
-    
-    ligands_raw.append({
-        "name": output_name or os.path.splitext(uploaded_name)[0], 
-        "base_smiles": base_smiles
-    })
 
 # Load model once (cached in module)
 _PKANET_MODEL = None
@@ -539,29 +464,71 @@ def run_job(
         tmp_path.write_bytes(uploaded_bytes)
 
         mol_in = None
-        if ext == ".pdb":
-            mol_in = Chem.MolFromPDBFile(str(tmp_path), removeHs=False, sanitize=False)
-        elif ext == ".mol2":
-            mol_in = Chem.MolFromMol2File(str(tmp_path), removeHs=False, sanitize=False)
-        elif ext == ".sdf":
-            supplier = Chem.SDMolSupplier(str(tmp_path), removeHs=False, sanitize=False)
-            mol_in = next((m for m in supplier if m is not None), None)
-        else:
-            raise ValueError("Unsupported file type. Use .pdb, .mol2, or .sdf")
+        parse_error = None
+        
+        try:
+            if ext == ".pdb":
+                mol_in = Chem.MolFromPDBFile(str(tmp_path), removeHs=False, sanitize=False)
+                if mol_in is None:
+                    parse_error = "PDB file could not be parsed by RDKit"
+                    
+            elif ext == ".mol2":
+                mol_in = read_mol2_with_fallback(str(tmp_path))
+                if mol_in is None:
+                    parse_error = (
+                        "MOL2 file could not be parsed. "
+                        "Try converting to SDF or PDB format first, or provide a SMILES string instead."
+                    )
+                    
+            elif ext == ".sdf":
+                supplier = Chem.SDMolSupplier(str(tmp_path), removeHs=False, sanitize=False)
+                mol_in = next((m for m in supplier if m is not None), None)
+                if mol_in is None:
+                    parse_error = "SDF file could not be parsed by RDKit"
+            else:
+                raise ValueError("Unsupported file type. Use .pdb, .mol2, or .sdf")
+        
+        except Exception as e:
+            raise ValueError(f"Error reading {ext} file: {str(e)}")
 
         if mol_in is None:
-            raise ValueError("RDKit could not parse uploaded ligand.")
+            error_msg = parse_error or "RDKit could not parse uploaded ligand."
+            
+            # Provide helpful suggestions
+            suggestions = [
+                "\n\nTroubleshooting suggestions:",
+                "\n1. Try converting your file to SDF or PDB format using another tool",
+                "\n2. Use a chemical structure editor to export the molecule",
+                "\n3. Provide the SMILES string directly instead of a file",
+            ]
+            
+            if ext == ".mol2" and not check_obabel():
+                suggestions.append("\n4. The server doesn't have Open Babel installed for MOL2 conversion")
+            
+            raise ValueError(error_msg + "".join(suggestions))
 
+        # Fragment handling and sanitization
         try:
             frags = Chem.GetMolFrags(mol_in, asMols=True, sanitizeFrags=False)
             if len(frags) > 1:
+                print(f"⚠️ Found {len(frags)} fragments, keeping largest")
                 mol_in = max(frags, key=lambda m: m.GetNumHeavyAtoms())
             Chem.SanitizeMol(mol_in)
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ Sanitization warning (continuing): {e}")
+            # Try to continue even if sanitization fails
             pass
 
-        base_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol_in), canonical=True)
-        ligands_raw.append({"name": output_name or os.path.splitext(uploaded_name)[0], "base_smiles": base_smiles})
+        # Convert to SMILES
+        try:
+            base_smiles = Chem.MolToSmiles(Chem.RemoveHs(mol_in), canonical=True)
+        except Exception as e:
+            raise ValueError(f"Could not generate SMILES from uploaded structure: {str(e)}")
+        
+        ligands_raw.append({
+            "name": output_name or os.path.splitext(uploaded_name)[0], 
+            "base_smiles": base_smiles
+        })
 
     else:
         raise ValueError("Unknown input_type")
