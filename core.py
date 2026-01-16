@@ -209,11 +209,17 @@ def ph_adjust_smiles_dimorphite(smiles_str: str, ph: float):
     return ph_smiles, q
 
 def build_minimized_3d(smiles: str):
+    """
+    Build 3D structure from SMILES with multiple fallback strategies.
+    Handles problematic molecules that cause RDKit embedding failures.
+    """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError("RDKit could not parse SMILES for 3D build.")
+    
     mol = Chem.AddHs(mol)
-
+    
+    # Strategy 1: Try ETKDG with standard parameters
     code = -1
     try:
         try:
@@ -222,21 +228,118 @@ def build_minimized_3d(smiles: str):
             params = AllChem.ETKDG()
         params.randomSeed = 0xF00D
         code = AllChem.EmbedMolecule(mol, params)
-    except Exception:
-        code = AllChem.EmbedMolecule(mol, randomSeed=0xF00D, maxAttempts=2000)
-
+        if code == 0 and mol.GetNumConformers() > 0:
+            print("✓ 3D embedding successful (ETKDG)")
+    except Exception as e:
+        print(f"⚠️ ETKDG embedding failed: {e}")
+        code = -1
+    
+    # Strategy 2: Try basic embedding with more attempts
     if code != 0 or mol.GetNumConformers() == 0:
-        code2 = AllChem.EmbedMolecule(mol, useRandomCoords=True, randomSeed=0xF00D, maxAttempts=2000)
-        if code2 != 0 or mol.GetNumConformers() == 0:
-            raise ValueError("3D embedding failed (no conformer).")
-
+        try:
+            print("⚠️ Trying basic embedding with maxAttempts=5000...")
+            code = AllChem.EmbedMolecule(mol, randomSeed=0xF00D, maxAttempts=5000)
+            if code == 0 and mol.GetNumConformers() > 0:
+                print("✓ 3D embedding successful (basic method)")
+        except Exception as e:
+            print(f"⚠️ Basic embedding failed: {e}")
+            code = -1
+    
+    # Strategy 3: Try random coordinates
+    if code != 0 or mol.GetNumConformers() == 0:
+        try:
+            print("⚠️ Trying random coordinates embedding...")
+            code = AllChem.EmbedMolecule(mol, useRandomCoords=True, randomSeed=0xF00D, maxAttempts=5000)
+            if code == 0 and mol.GetNumConformers() > 0:
+                print("✓ 3D embedding successful (random coords)")
+        except Exception as e:
+            print(f"⚠️ Random coords embedding failed: {e}")
+            code = -1
+    
+    # Strategy 4: Try with enforceChirality=False (relaxes stereochemistry constraints)
+    if code != 0 or mol.GetNumConformers() == 0:
+        try:
+            print("⚠️ Trying embedding without chirality enforcement...")
+            try:
+                params = AllChem.ETKDGv3()
+            except AttributeError:
+                params = AllChem.ETKDG()
+            params.randomSeed = 0xF00D
+            params.enforceChirality = False
+            code = AllChem.EmbedMolecule(mol, params)
+            if code == 0 and mol.GetNumConformers() > 0:
+                print("✓ 3D embedding successful (no chirality)")
+        except Exception as e:
+            print(f"⚠️ No-chirality embedding failed: {e}")
+            code = -1
+    
+    # Strategy 5: Remove hydrogens and try simpler embedding
+    if code != 0 or mol.GetNumConformers() == 0:
+        try:
+            print("⚠️ Trying embedding without explicit hydrogens...")
+            mol_no_h = Chem.RemoveHs(mol)
+            code = AllChem.EmbedMolecule(mol_no_h, randomSeed=0xF00D, maxAttempts=5000)
+            if code == 0 and mol_no_h.GetNumConformers() > 0:
+                # Add hydrogens back
+                mol = Chem.AddHs(mol_no_h, addCoords=True)
+                print("✓ 3D embedding successful (without H, then added back)")
+        except Exception as e:
+            print(f"⚠️ No-H embedding failed: {e}")
+            code = -1
+    
+    # Strategy 6: Last resort - very simple 2D to 3D conversion
+    if code != 0 or mol.GetNumConformers() == 0:
+        try:
+            print("⚠️ Last resort: simple 2D→3D conversion...")
+            mol_simple = Chem.RemoveHs(mol)
+            AllChem.Compute2DCoords(mol_simple)
+            
+            # Create a simple 3D structure by adding z-coordinates
+            conf = mol_simple.GetConformer()
+            for i in range(mol_simple.GetNumAtoms()):
+                pos = conf.GetAtomPosition(i)
+                # Set z-coordinate to 0 for a planar structure
+                conf.SetAtomPosition(i, (pos.x, pos.y, 0.0))
+            
+            mol = Chem.AddHs(mol_simple, addCoords=True)
+            
+            if mol.GetNumConformers() > 0:
+                print("✓ Generated planar 3D structure (2D→3D)")
+            else:
+                raise ValueError("Even 2D→3D conversion failed")
+        except Exception as e:
+            print(f"⚠️ 2D→3D conversion failed: {e}")
+            raise ValueError(
+                "3D embedding failed with all methods. "
+                "The molecule may be too complex or have geometric constraints that cannot be satisfied. "
+                "Try simplifying the structure or providing a different input format."
+            )
+    
+    # Final check
+    if mol.GetNumConformers() == 0:
+        raise ValueError(
+            "3D embedding failed - no conformer generated. "
+            "The molecule structure may have impossible geometric constraints."
+        )
+    
+    # Geometry optimization
     try:
         if AllChem.MMFFHasAllMoleculeParams(mol):
-            AllChem.MMFFOptimizeMolecule(mol, maxIters=500)
+            result = AllChem.MMFFOptimizeMolecule(mol, maxIters=500)
+            if result == 0:
+                print("✓ MMFF optimization converged")
+            else:
+                print(f"⚠️ MMFF optimization did not fully converge (code: {result})")
         else:
-            AllChem.UFFOptimizeMolecule(mol, maxIters=500)
-    except Exception:
-        pass
+            print("⚠️ MMFF parameters unavailable, using UFF...")
+            result = AllChem.UFFOptimizeMolecule(mol, maxIters=500)
+            if result == 0:
+                print("✓ UFF optimization converged")
+            else:
+                print(f"⚠️ UFF optimization did not fully converge (code: {result})")
+    except Exception as e:
+        print(f"⚠️ Minimization failed ({e}), keeping embedded structure")
+    
     return mol
 
 def parse_smi_lines(text: str):
