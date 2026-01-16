@@ -128,7 +128,7 @@ elif input_type == "SMI_FILE":
 else:
     uploaded = st.file_uploader(
         "Upload ligand file",
-        type=["pdb", "mol2", "sdf"],
+        type=["pdb"],
     )
     st.info("📝 Supported formats: PDB")
 
