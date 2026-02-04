@@ -147,14 +147,25 @@ def detect_zwitterion_capable(smiles: str) -> bool:
     if mol is None:
         return False
     
-    # SMARTS patterns for common ionizable groups
+    # SMARTS patterns for acidic groups
     carboxyl_pattern = Chem.MolFromSmarts('[CX3](=O)[OX2H1]')  # Carboxylic acid
-    amino_pattern = Chem.MolFromSmarts('[NX3;H2,H1;!$(NC=O)]')  # Primary/secondary amine (not amide)
+    sulfonamide_pattern = Chem.MolFromSmarts('[S](=O)(=O)[NH1]')  # Sulfonamide NH
     
-    has_carboxyl = mol.HasSubstructMatch(carboxyl_pattern) if carboxyl_pattern else False
-    has_amino = mol.HasSubstructMatch(amino_pattern) if amino_pattern else False
+    # SMARTS patterns for basic groups
+    # Primary/secondary amine (not amide, not sulfonamide)
+    amino_pattern = Chem.MolFromSmarts('[NX3;H2,H1;!$(NC=O);!$(NS(=O)=O)]')
     
-    return has_carboxyl and has_amino
+    has_acidic = False
+    has_basic = False
+    
+    if carboxyl_pattern and mol.HasSubstructMatch(carboxyl_pattern):
+        has_acidic = True
+    if sulfonamide_pattern and mol.HasSubstructMatch(sulfonamide_pattern):
+        has_acidic = True
+    if amino_pattern and mol.HasSubstructMatch(amino_pattern):
+        has_basic = True
+    
+    return has_acidic and has_basic
 
 
 def generate_zwitterion_smiles(smiles_str: str, ph: float) -> Tuple[str, int]:
@@ -175,7 +186,8 @@ def generate_zwitterion_smiles(smiles_str: str, ph: float) -> Tuple[str, int]:
     # Create an editable molecule
     mol_edit = Chem.RWMol(mol)
     
-    # Find carboxyl groups and deprotonate them (COO-)
+    # Find and deprotonate acidic groups
+    # 1. Carboxyl groups: COOH → COO-
     carboxyl_pattern = Chem.MolFromSmarts('[CX3](=O)[OX2H1]')
     if carboxyl_pattern:
         matches = mol_edit.GetSubstructMatches(carboxyl_pattern)
@@ -185,8 +197,19 @@ def generate_zwitterion_smiles(smiles_str: str, ph: float) -> Tuple[str, int]:
             atom.SetFormalCharge(-1)
             atom.SetNumExplicitHs(0)
     
-    # Find amino groups and protonate them (NH3+)
-    amino_pattern = Chem.MolFromSmarts('[NX3;H2,H1;!$(NC=O)]')
+    # 2. Sulfonamide NH: S(=O)(=O)NH → S(=O)(=O)N-
+    sulfonamide_pattern = Chem.MolFromSmarts('[S](=O)(=O)[NH1]')
+    if sulfonamide_pattern:
+        matches = mol_edit.GetSubstructMatches(sulfonamide_pattern)
+        for match in matches:
+            n_idx = match[3]  # The NH nitrogen (index 3 in the match)
+            atom = mol_edit.GetAtomWithIdx(n_idx)
+            atom.SetFormalCharge(-1)
+            atom.SetNumExplicitHs(0)
+    
+    # Find and protonate basic groups
+    # Amino groups (not part of amide or sulfonamide): NH2/NH → NH3+/NH2+
+    amino_pattern = Chem.MolFromSmarts('[NX3;H2,H1;!$(NC=O);!$(NS(=O)=O)]')
     if amino_pattern:
         matches = mol_edit.GetSubstructMatches(amino_pattern)
         for match in matches:
