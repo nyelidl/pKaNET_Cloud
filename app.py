@@ -139,7 +139,7 @@ uploaded = None
 # Input section
 if input_type == "SMILES":
     smiles_text = st.text_area(
-        "SMILES\nexample: O=S(NC1=NC(C2=CN(C(CC#N)C3CCCC3)N=C2)=C(C=CN4)C4=N1)(C5=CC=C(C6CCNCC6)C=C5)=O",
+        "SMILES\nexample: CC(C)CC1=CC=C(C=C1)C(C)C(=O)O",
         height=120,
         placeholder="Paste a SMILES here:",
     )
