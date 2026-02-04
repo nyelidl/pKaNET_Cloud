@@ -4,7 +4,6 @@ from pathlib import Path
 import os
 import zipfile
 from typing import Optional, Dict, Any, List, Tuple
-
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
@@ -132,6 +131,83 @@ def ph_adjust_smiles_dimorphite(smiles_str: str, ph: float):
         raise ValueError("RDKit could not parse Dimorphite-DL SMILES.")
     q = Chem.GetFormalCharge(mol)
     return ph_smiles, q
+
+
+def detect_zwitterion_capable(smiles: str) -> bool:
+    """
+    Detect if a molecule can form a zwitterion (has both acidic and basic groups)
+    
+    Args:
+        smiles: SMILES string
+    
+    Returns:
+        True if molecule can potentially form a zwitterion
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return False
+    
+    # SMARTS patterns for common ionizable groups
+    carboxyl_pattern = Chem.MolFromSmarts('[CX3](=O)[OX2H1]')  # Carboxylic acid
+    amino_pattern = Chem.MolFromSmarts('[NX3;H2,H1;!$(NC=O)]')  # Primary/secondary amine (not amide)
+    
+    has_carboxyl = mol.HasSubstructMatch(carboxyl_pattern) if carboxyl_pattern else False
+    has_amino = mol.HasSubstructMatch(amino_pattern) if amino_pattern else False
+    
+    return has_carboxyl and has_amino
+
+
+def generate_zwitterion_smiles(smiles_str: str, ph: float) -> Tuple[str, int]:
+    """
+    Generate zwitterionic form of a molecule
+    
+    Args:
+        smiles_str: Input SMILES string
+        ph: Target pH
+    
+    Returns:
+        Tuple of (zwitterion_smiles, formal_charge)
+    """
+    mol = Chem.MolFromSmiles(smiles_str)
+    if mol is None:
+        raise ValueError("Invalid SMILES for zwitterion generation")
+    
+    # Create an editable molecule
+    mol_edit = Chem.RWMol(mol)
+    
+    # Find carboxyl groups and deprotonate them (COO-)
+    carboxyl_pattern = Chem.MolFromSmarts('[CX3](=O)[OX2H1]')
+    if carboxyl_pattern:
+        matches = mol_edit.GetSubstructMatches(carboxyl_pattern)
+        for match in matches:
+            o_idx = match[2]  # The OH oxygen
+            atom = mol_edit.GetAtomWithIdx(o_idx)
+            atom.SetFormalCharge(-1)
+            atom.SetNumExplicitHs(0)
+    
+    # Find amino groups and protonate them (NH3+)
+    amino_pattern = Chem.MolFromSmarts('[NX3;H2,H1;!$(NC=O)]')
+    if amino_pattern:
+        matches = mol_edit.GetSubstructMatches(amino_pattern)
+        for match in matches:
+            n_idx = match[0]
+            atom = mol_edit.GetAtomWithIdx(n_idx)
+            current_h = atom.GetTotalNumHs()
+            atom.SetFormalCharge(1)
+            atom.SetNumExplicitHs(current_h + 1)
+    
+    # Convert back to molecule and get SMILES
+    try:
+        zwitterion_mol = mol_edit.GetMol()
+        Chem.SanitizeMol(zwitterion_mol)
+        zwitter_smiles = Chem.MolToSmiles(zwitterion_mol)
+        formal_charge = Chem.GetFormalCharge(zwitterion_mol)
+        return zwitter_smiles, formal_charge
+    except Exception as e:
+        print(f"Warning: Could not generate valid zwitterion: {e}")
+        # Fall back to regular pH adjustment
+        return ph_adjust_smiles_dimorphite(smiles_str, ph)
+
 
 def build_minimized_3d(smiles: str):
     mol = Chem.MolFromSmiles(smiles)
@@ -355,6 +431,7 @@ def run_job(
     out_dir: str,
     output_formats: List[str] = None,
     enumerate_stereoisomers: bool = True,
+    generate_zwitterion: bool = False,
 ) -> Dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -448,6 +525,7 @@ def run_job(
             if warning_msg not in format_warnings:
                 format_warnings.append(warning_msg)
 
+        # Standard protonation state
         ph_smiles, formal_charge = ph_adjust_smiles_dimorphite(base_smiles, target_pH)
         mol_min = build_minimized_3d(ph_smiles)
 
@@ -472,6 +550,7 @@ def run_job(
             "ph_smiles": ph_smiles,
             "pka_pred": pka_pred,
             "formal_charge": formal_charge,
+            "is_zwitterion": False,
         }
         
         # Add stereoisomer ID if it was enumerated
@@ -488,6 +567,56 @@ def run_job(
         
         results.append(result_entry)
 
+        # Generate zwitterion if requested and molecule is capable
+        if generate_zwitterion and detect_zwitterion_capable(base_smiles):
+            try:
+                zwitter_smiles, zwitter_charge = generate_zwitterion_smiles(base_smiles, target_pH)
+                zwitter_mol = build_minimized_3d(zwitter_smiles)
+                
+                # Save zwitterion with _zwitter suffix
+                zwitter_file_path = str(out / f"{base_name}{suffix}_zwitter_min")
+                zwitter_save_result = save_molecule_files(zwitter_mol, zwitter_file_path, formats_to_save)
+                zwitter_saved_files = zwitter_save_result["files"]
+                
+                # Save 2D structure for zwitterion
+                zwitter_png_path = str(out / f"{base_name}{suffix}_zwitter_2D.png")
+                if save_2d_structure_image(zwitter_smiles, zwitter_png_path):
+                    zwitter_saved_files["png_2d"] = zwitter_png_path
+                
+                # Collect warnings
+                for warning in zwitter_save_result["warnings"]:
+                    if warning not in format_warnings:
+                        format_warnings.append(warning)
+                
+                # Create result entry for zwitterion
+                zwitter_entry = {
+                    "name": f"{pretty_name}_zwitter",
+                    "base_smiles": base_smiles,
+                    "ph_smiles": zwitter_smiles,
+                    "pka_pred": pka_pred,
+                    "formal_charge": zwitter_charge,
+                    "is_zwitterion": True,
+                }
+                
+                if stereo:
+                    zwitter_entry["stereoisomer_id"] = stereo
+                
+                if "pdb" in zwitter_saved_files:
+                    zwitter_entry["minimized_pdb"] = zwitter_saved_files["pdb"]
+                if "sdf" in zwitter_saved_files:
+                    zwitter_entry["minimized_sdf"] = zwitter_saved_files["sdf"]
+                if "mol2" in zwitter_saved_files:
+                    zwitter_entry["minimized_mol2"] = zwitter_saved_files["mol2"]
+                
+                results.append(zwitter_entry)
+                print(f"✓ Generated zwitterion form for {pretty_name}")
+                
+            except Exception as e:
+                print(f"Warning: Zwitterion generation failed for {pretty_name}: {e}")
+                warning_msg = f"Zwitterion generation failed for {pretty_name}: {str(e)}"
+                if warning_msg not in format_warnings:
+                    format_warnings.append(warning_msg)
+
     # Write summary file
     summary_lines = []
     summary_lines.append("=" * 80)
@@ -495,6 +624,7 @@ def run_job(
     summary_lines.append("=" * 80)
     summary_lines.append(f"Target pH: {target_pH}")
     summary_lines.append(f"Stereoisomer enumeration: {'Enabled' if enumerate_stereoisomers else 'Disabled'}")
+    summary_lines.append(f"Zwitterion generation: {'Enabled' if generate_zwitterion else 'Disabled'}")
     summary_lines.append(f"Total structures generated: {len(results)}")
     summary_lines.append("=" * 80)
     summary_lines.append("")
@@ -509,6 +639,9 @@ def run_job(
         pka_value = f"{r['pka_pred']:.2f}" if r['pka_pred'] is not None else "N/A"
         summary_lines.append(f"  Predicted pKa        : {pka_value}")
         summary_lines.append(f"  Formal Charge (pH {target_pH}): {r['formal_charge']:+d}")
+        
+        if r.get('is_zwitterion', False):
+            summary_lines.append(f"  Form                 : Zwitterion")
         
         # Show what formats were actually generated
         generated_formats = []
@@ -537,16 +670,18 @@ def run_job(
         log_lines.append("# pKaNET Cloud - Processing Log")
         log_lines.append(f"# Target pH: {target_pH}")
         log_lines.append(f"# Stereoisomer enumeration: {'enabled' if enumerate_stereoisomers else 'disabled'}")
+        log_lines.append(f"# Zwitterion generation: {'enabled' if generate_zwitterion else 'disabled'}")
         log_lines.append(f"# Total molecules processed: {len(results)}")
         log_lines.append(f"# pKa prediction: pKaPredict (Machine Learning)")
         log_lines.append("#" + "="*70)
         log_lines.append("")
-        log_lines.append("# Columns: Name | pH-adjusted SMILES | Formal Charge | Predicted pKa")
+        log_lines.append("# Columns: Name | pH-adjusted SMILES | Formal Charge | Predicted pKa | Form")
         log_lines.append("")
         
         for r in results:
             pka_str = f"{r['pka_pred']:.2f}" if r["pka_pred"] is not None else "N/A"
-            log_lines.append(f"{r['name']}\t{r['ph_smiles']}\t{r['formal_charge']:+d}\t{pka_str}")
+            form = "Zwitterion" if r.get('is_zwitterion', False) else "Standard"
+            log_lines.append(f"{r['name']}\t{r['ph_smiles']}\t{r['formal_charge']:+d}\t{pka_str}\t{form}")
         
         (out / "processing.log").write_text("\n".join(log_lines) + "\n")
 
