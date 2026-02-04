@@ -4,6 +4,9 @@ from pathlib import Path
 import os
 import zipfile
 from typing import Optional, Dict, Any, List, Tuple
+import numpy as np
+from collections import defaultdict
+
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
@@ -60,6 +63,135 @@ def convert_pdb_to_mol2_obabel(pdb_path: str, mol2_path: str) -> bool:
     except Exception as e:
         print(f"Open Babel conversion error: {e}")
         return False
+
+
+# =========================================
+# Charge profile helper (net charge + zwitterion flag)
+# =========================================
+def charge_profile_from_smiles(smiles: str) -> Dict[str, Any]:
+    """
+    Return:
+      - net_charge
+      - has_pos / has_neg (any + / any − atoms)
+      - strict zwitterion: has_pos and has_neg and net_charge == 0
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError("RDKit could not parse SMILES for charge profiling.")
+    atom_charges = [a.GetFormalCharge() for a in mol.GetAtoms()]
+    n_pos = sum(c > 0 for c in atom_charges)
+    n_neg = sum(c < 0 for c in atom_charges)
+    net = int(sum(atom_charges))
+    return {
+        "net_charge": net,
+        "has_pos": n_pos > 0,
+        "has_neg": n_neg > 0,
+        "n_pos_atoms": int(n_pos),
+        "n_neg_atoms": int(n_neg),
+        "is_zwitterion_strict": bool((n_pos > 0) and (n_neg > 0) and (net == 0)),
+    }
+
+
+# =========================================
+# IUPAC pKa lookup (optional - requires pandas and network access)
+# =========================================
+_IUPAC_DF = None
+_PKA_MAP_ALL = None
+_IUPAC_LOADED = False
+
+def load_iupac_dataset():
+    """Load IUPAC pKa dataset if pandas is available"""
+    global _IUPAC_DF, _PKA_MAP_ALL, _IUPAC_LOADED
+    
+    if _IUPAC_LOADED:
+        return
+    
+    _IUPAC_LOADED = True
+    
+    try:
+        import pandas as pd
+        IUPAC_CSV_URL = "https://raw.githubusercontent.com/IUPAC/Dissociation-Constants/main/iupac_high-confidence_v2_3.csv"
+        
+        print("⏳ Loading IUPAC pKa dataset...")
+        iupac_df = pd.read_csv(IUPAC_CSV_URL)
+        print(f"✓ IUPAC dataset loaded: {len(iupac_df):,} rows")
+        
+        # Find SMILES and pKa columns
+        cols = list(iupac_df.columns)
+        lower_map = {c.lower(): c for c in cols}
+        
+        smiles_col = None
+        for w in ["SMILES", "smiles"]:
+            if w in cols:
+                smiles_col = w
+                break
+            if w.lower() in lower_map:
+                smiles_col = lower_map[w.lower()]
+                break
+        
+        pka_col = None
+        for w in ["pka_value", "pKa", "pka", "value"]:
+            if w in cols:
+                pka_col = w
+                break
+            if w.lower() in lower_map:
+                pka_col = lower_map[w.lower()]
+                break
+        
+        if smiles_col is None or pka_col is None:
+            print(f"⚠️ Cannot find SMILES/pKa columns in IUPAC dataset")
+            return
+        
+        # Build canonical SMILES lookup
+        def canonicalize(smi):
+            m = Chem.MolFromSmiles(str(smi).strip())
+            return Chem.MolToSmiles(m, canonical=True) if m else None
+        
+        iupac_df["_cansmi"] = iupac_df[smiles_col].apply(canonicalize)
+        
+        pka_map = defaultdict(list)
+        for csmi, pka in zip(iupac_df["_cansmi"], iupac_df[pka_col]):
+            if csmi is None:
+                continue
+            try:
+                pka_map[csmi].append(float(pka))
+            except Exception:
+                pass
+        
+        _IUPAC_DF = iupac_df
+        _PKA_MAP_ALL = pka_map
+        print(f"✓ IUPAC indexed molecules: {len(pka_map):,}")
+        
+    except Exception as e:
+        print(f"⚠️ IUPAC dataset load failed: {e}")
+        print("   Will use pKaPredict only.")
+
+
+def lookup_pka_iupac_stats(query_smiles: str) -> Optional[Dict[str, Any]]:
+    """Return dict with median/mean/min/max/n/all if matched; else None."""
+    if _PKA_MAP_ALL is None:
+        return None
+    
+    mol = Chem.MolFromSmiles(query_smiles)
+    if mol is None:
+        return None
+    
+    canonical_smi = Chem.MolToSmiles(mol, canonical=True)
+    vals = _PKA_MAP_ALL.get(canonical_smi, [])
+    
+    if not vals:
+        return None
+    
+    vals = sorted(vals)
+    return {
+        "pka_median": float(np.median(vals)),
+        "pka_mean": float(np.mean(vals)),
+        "pka_min": float(np.min(vals)),
+        "pka_max": float(np.max(vals)),
+        "n": len(vals),
+        "all": vals,
+        "canonical_smiles": canonical_smi,
+    }
 
 
 # Load model once (cached in module)
@@ -121,115 +253,67 @@ def predict_pka_pkanet(smiles: str) -> float:
         print(f"Error during pKa prediction for SMILES '{smiles}': {e}")
         raise
 
-def ph_adjust_smiles_dimorphite(smiles_str: str, ph: float):
-    prot_list = protonate_smiles(smiles_str, ph_min=ph, ph_max=ph, max_variants=1)
+
+def get_pka_iupac_else_ml(smiles: str) -> Tuple[float, str, Optional[Dict]]:
+    """
+    Get pKa value: try IUPAC first, then fall back to pKaPredict ML
+    
+    Returns:
+        (pka_value, source_string, iupac_stats_dict_or_None)
+    """
+    stats = lookup_pka_iupac_stats(smiles)
+    if stats is not None:
+        return stats["pka_median"], f"IUPAC (n={stats['n']})", stats
+    return predict_pka_pkanet(smiles), "pKaPredict (ML)", None
+
+
+def ph_adjust_smiles_dimorphite(smiles_str: str, ph: float, mode: str = "AUTO") -> Tuple[str, int, Dict[str, Any]]:
+    """
+    Generate protonated SMILES at target pH using Dimorphite-DL.
+    
+    Args:
+        smiles_str: Input SMILES
+        ph: Target pH
+        mode: Charge selection mode
+            - AUTO: return first variant (Dimorphite default)
+            - FORCE_ZWITTERION: return a strict zwitterion if present among variants; else fallback to most neutral
+            - NORMAL: choose most neutral (smallest |net charge|)
+    
+    Returns:
+        (selected_smiles, net_charge, charge_profile_dict)
+    """
+    prot_list = protonate_smiles(smiles_str, ph_min=ph, ph_max=ph, max_variants=4)
     if not prot_list:
         raise ValueError("Dimorphite-DL returned no protonation state.")
-    ph_smiles = prot_list[0]
-    mol = Chem.MolFromSmiles(ph_smiles)
-    if mol is None:
-        raise ValueError("RDKit could not parse Dimorphite-DL SMILES.")
-    q = Chem.GetFormalCharge(mol)
-    return ph_smiles, q
 
+    candidates = []
+    for smi in prot_list:
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            continue
+        prof = charge_profile_from_smiles(smi)
+        candidates.append((smi, prof))
 
-def detect_zwitterion_capable(smiles: str) -> bool:
-    """
-    Detect if a molecule can form a zwitterion (has both acidic and basic groups)
-    
-    Args:
-        smiles: SMILES string
-    
-    Returns:
-        True if molecule can potentially form a zwitterion
-    """
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        return False
-    
-    # SMARTS patterns for acidic groups
-    carboxyl_pattern = Chem.MolFromSmarts('[CX3](=O)[OX2H1]')  # Carboxylic acid
-    sulfonamide_pattern = Chem.MolFromSmarts('[S](=O)(=O)[NH1]')  # Sulfonamide NH
-    
-    # SMARTS patterns for basic groups
-    # Primary/secondary amine (not amide, not sulfonamide)
-    amino_pattern = Chem.MolFromSmarts('[NX3;H2,H1;!$(NC=O);!$(NS(=O)=O)]')
-    
-    has_acidic = False
-    has_basic = False
-    
-    if carboxyl_pattern and mol.HasSubstructMatch(carboxyl_pattern):
-        has_acidic = True
-    if sulfonamide_pattern and mol.HasSubstructMatch(sulfonamide_pattern):
-        has_acidic = True
-    if amino_pattern and mol.HasSubstructMatch(amino_pattern):
-        has_basic = True
-    
-    return has_acidic and has_basic
+    if not candidates:
+        raise ValueError("RDKit could not parse Dimorphite-DL variants.")
 
+    if mode == "FORCE_ZWITTERION":
+        # First try to find a strict zwitterion
+        for smi, prof in candidates:
+            if prof["is_zwitterion_strict"]:
+                return smi, prof["net_charge"], prof
+        # fallback: most neutral
+        smi, prof = min(candidates, key=lambda x: abs(x[1]["net_charge"]))
+        return smi, prof["net_charge"], prof
 
-def generate_zwitterion_smiles(smiles_str: str, ph: float) -> Tuple[str, int]:
-    """
-    Generate zwitterionic form of a molecule
-    
-    Args:
-        smiles_str: Input SMILES string
-        ph: Target pH
-    
-    Returns:
-        Tuple of (zwitterion_smiles, formal_charge)
-    """
-    mol = Chem.MolFromSmiles(smiles_str)
-    if mol is None:
-        raise ValueError("Invalid SMILES for zwitterion generation")
-    
-    # Create an editable molecule
-    mol_edit = Chem.RWMol(mol)
-    
-    # Find and deprotonate acidic groups
-    # 1. Carboxyl groups: COOH → COO-
-    carboxyl_pattern = Chem.MolFromSmarts('[CX3](=O)[OX2H1]')
-    if carboxyl_pattern:
-        matches = mol_edit.GetSubstructMatches(carboxyl_pattern)
-        for match in matches:
-            o_idx = match[2]  # The OH oxygen
-            atom = mol_edit.GetAtomWithIdx(o_idx)
-            atom.SetFormalCharge(-1)
-            atom.SetNumExplicitHs(0)
-    
-    # 2. Sulfonamide NH: S(=O)(=O)NH → S(=O)(=O)N-
-    sulfonamide_pattern = Chem.MolFromSmarts('[S](=O)(=O)[NH1]')
-    if sulfonamide_pattern:
-        matches = mol_edit.GetSubstructMatches(sulfonamide_pattern)
-        for match in matches:
-            n_idx = match[3]  # The NH nitrogen (index 3 in the match)
-            atom = mol_edit.GetAtomWithIdx(n_idx)
-            atom.SetFormalCharge(-1)
-            atom.SetNumExplicitHs(0)
-    
-    # Find and protonate basic groups
-    # Amino groups (not part of amide or sulfonamide): NH2/NH → NH3+/NH2+
-    amino_pattern = Chem.MolFromSmarts('[NX3;H2,H1;!$(NC=O);!$(NS(=O)=O)]')
-    if amino_pattern:
-        matches = mol_edit.GetSubstructMatches(amino_pattern)
-        for match in matches:
-            n_idx = match[0]
-            atom = mol_edit.GetAtomWithIdx(n_idx)
-            current_h = atom.GetTotalNumHs()
-            atom.SetFormalCharge(1)
-            atom.SetNumExplicitHs(current_h + 1)
-    
-    # Convert back to molecule and get SMILES
-    try:
-        zwitterion_mol = mol_edit.GetMol()
-        Chem.SanitizeMol(zwitterion_mol)
-        zwitter_smiles = Chem.MolToSmiles(zwitterion_mol)
-        formal_charge = Chem.GetFormalCharge(zwitterion_mol)
-        return zwitter_smiles, formal_charge
-    except Exception as e:
-        print(f"Warning: Could not generate valid zwitterion: {e}")
-        # Fall back to regular pH adjustment
-        return ph_adjust_smiles_dimorphite(smiles_str, ph)
+    if mode == "NORMAL":
+        # Choose most neutral (smallest |net charge|)
+        smi, prof = min(candidates, key=lambda x: abs(x[1]["net_charge"]))
+        return smi, prof["net_charge"], prof
+
+    # AUTO - return first variant
+    smi, prof = candidates[0]
+    return smi, prof["net_charge"], prof
 
 
 def build_minimized_3d(smiles: str):
@@ -277,55 +361,57 @@ def parse_smi_lines(text: str):
         idx += 1
     return records
 
-def generate_RS_variants(base_smiles: str, base_name: str):
+def generate_RS_variants(base_smiles: str, base_name: str, keep_original: bool = False):
+    """
+    Generate stereoisomer variants.
+    
+    Args:
+        base_smiles: Input SMILES
+        base_name: Base molecule name
+        keep_original: If True, return only the original stereochemistry
+    
+    Returns:
+        List of dicts with name, stereo, base_smiles
+    """
     mol = Chem.MolFromSmiles(base_smiles)
     if mol is None:
         return [{"name": base_name, "stereo": None, "base_smiles": base_smiles}]
 
-    # Assign stereochemistry to the original molecule
-    Chem.AssignStereochemistry(mol, force=True, cleanIt=True)
-    centers = Chem.FindMolChiralCenters(mol, includeUnassigned=False)
-    
-    # If no chiral centers, return as is
-    if not centers:
-        return [{"name": base_name, "stereo": None, "base_smiles": base_smiles}]
-    
-    # If more than 1 chiral center, return only the original form
-    if len(centers) > 1:
-        print(f"ℹ️ {base_name}: Multiple chiral centers detected ({len(centers)}), keeping original stereochemistry")
-        return [{"name": base_name, "stereo": None, "base_smiles": base_smiles}]
-    
-    # Only 1 chiral center - enumerate R/S variants
+    if keep_original:
+        return [{"name": base_name, "stereo": None, "base_smiles": Chem.MolToSmiles(mol, isomericSmiles=True)}]
+
     opts = StereoEnumerationOptions(onlyUnassigned=False)
     isomers = list(EnumerateStereoisomers(mol, options=opts))
 
     if len(isomers) == 1:
-        iso_smiles = Chem.MolToSmiles(isomers[0], isomericSmiles=True)
-        return [{"name": base_name, "stereo": None, "base_smiles": iso_smiles}]
+        return [{"name": base_name, "stereo": None, "base_smiles": Chem.MolToSmiles(isomers[0], isomericSmiles=True)}]
 
-    target_idx = centers[0][0]
     variants = []
     used = set()
-
     for iso in isomers:
         Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
-        iso_centers = Chem.FindMolChiralCenters(iso, includeUnassigned=False)
+        centers = Chem.FindMolChiralCenters(iso, includeUnassigned=False)
+        labs = {lab for _, lab in centers if lab in ("R", "S")}
+        
+        # Label for filename
         label_here = None
-        for idx, label in iso_centers:
-            if idx == target_idx and label in ("R", "S"):
-                label_here = label
-                break
-        if label_here and label_here not in used:
+        if "R" in labs and "R" not in used:
+            label_here = "R"
+        elif "S" in labs and "S" not in used:
+            label_here = "S"
+
+        if label_here:
             used.add(label_here)
             variants.append({
                 "name": base_name,
                 "stereo": label_here,
                 "base_smiles": Chem.MolToSmiles(iso, isomericSmiles=True)
             })
+
         if used == {"R", "S"}:
             break
 
-    return variants or [{"name": base_name, "stereo": None, "base_smiles": Chem.MolToSmiles(isomers[0], isomericSmiles=True)}]
+    return variants if variants else [{"name": base_name, "stereo": None, "base_smiles": Chem.MolToSmiles(isomers[0], isomericSmiles=True)}]
 
 
 def save_2d_structure_image(smiles: str, output_path: str, size=(800, 600)) -> bool:
@@ -461,7 +547,8 @@ def run_job(
     out_dir: str,
     output_formats: List[str] = None,
     enumerate_stereoisomers: bool = True,
-    generate_zwitterion: bool = False,
+    charge_mode: str = "AUTO",
+    use_iupac_pka: bool = True,
 ) -> Dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -472,6 +559,13 @@ def run_job(
     
     # User-selected formats (SDF is handled separately, always generated)
     formats_to_save = [fmt.upper() for fmt in output_formats]
+    
+    # Load IUPAC dataset if requested
+    if use_iupac_pka and not _IUPAC_LOADED:
+        try:
+            load_iupac_dataset()
+        except Exception:
+            pass
 
     ligands_raw = []
 
@@ -525,12 +619,9 @@ def run_job(
 
     # Enumerate stereoisomers if requested
     ligands = []
-    if enumerate_stereoisomers:
-        for lig in ligands_raw:
-            ligands.extend(generate_RS_variants(lig["base_smiles"], lig["name"]))
-    else:
-        for lig in ligands_raw:
-            ligands.append({"name": lig["name"], "stereo": None, "base_smiles": lig["base_smiles"]})
+    keep_stereo = not enumerate_stereoisomers
+    for lig in ligands_raw:
+        ligands.extend(generate_RS_variants(lig["base_smiles"], lig["name"], keep_stereo))
 
     results = []
     format_warnings = []  # Collect warnings across all molecules
@@ -543,20 +634,32 @@ def run_job(
 
         base_smiles = lig["base_smiles"]
 
-        # Predict pKa with better error handling
+        # Predict pKa with IUPAC lookup first, then ML
         pka_pred = None
+        pka_source = None
+        pka_n = None
         try:
-            pka_pred = predict_pka_pkanet(base_smiles)
-            print(f"pKa prediction for {pretty_name}: {pka_pred:.2f}")
+            if use_iupac_pka:
+                pka_pred, pka_source, meta = get_pka_iupac_else_ml(base_smiles)
+                if meta and "n" in meta:
+                    pka_n = meta["n"]
+            else:
+                pka_pred = predict_pka_pkanet(base_smiles)
+                pka_source = "pKaPredict (ML)"
+            print(f"pKa ({pka_source}) for {pretty_name}: {pka_pred:.2f}")
         except Exception as e:
             print(f"Warning: pKa prediction failed for {pretty_name}: {e}")
-            # Add warning to format_warnings
             warning_msg = f"pKa prediction failed for {pretty_name}: {str(e)}"
             if warning_msg not in format_warnings:
                 format_warnings.append(warning_msg)
 
-        # Standard protonation state
-        ph_smiles, formal_charge = ph_adjust_smiles_dimorphite(base_smiles, target_pH)
+        # pH adjustment with charge mode
+        try:
+            ph_smiles, formal_charge, charge_prof = ph_adjust_smiles_dimorphite(base_smiles, target_pH, charge_mode)
+        except Exception as e:
+            print(f"Error: pH adjustment failed for {pretty_name}: {e}")
+            continue
+
         mol_min = build_minimized_3d(ph_smiles)
 
         # Save molecule in requested formats (SDF always included)
@@ -579,8 +682,14 @@ def run_job(
             "base_smiles": base_smiles,
             "ph_smiles": ph_smiles,
             "pka_pred": pka_pred,
+            "pka_source": pka_source,
+            "pka_n": pka_n,
             "formal_charge": formal_charge,
-            "is_zwitterion": False,
+            "has_pos": charge_prof["has_pos"],
+            "has_neg": charge_prof["has_neg"],
+            "n_pos_atoms": charge_prof["n_pos_atoms"],
+            "n_neg_atoms": charge_prof["n_neg_atoms"],
+            "is_zwitterion": charge_prof["is_zwitterion_strict"],
         }
         
         # Add stereoisomer ID if it was enumerated
@@ -597,65 +706,17 @@ def run_job(
         
         results.append(result_entry)
 
-        # Generate zwitterion if requested and molecule is capable
-        if generate_zwitterion and detect_zwitterion_capable(base_smiles):
-            try:
-                zwitter_smiles, zwitter_charge = generate_zwitterion_smiles(base_smiles, target_pH)
-                zwitter_mol = build_minimized_3d(zwitter_smiles)
-                
-                # Save zwitterion with _zwitter suffix
-                zwitter_file_path = str(out / f"{base_name}{suffix}_zwitter_min")
-                zwitter_save_result = save_molecule_files(zwitter_mol, zwitter_file_path, formats_to_save)
-                zwitter_saved_files = zwitter_save_result["files"]
-                
-                # Save 2D structure for zwitterion
-                zwitter_png_path = str(out / f"{base_name}{suffix}_zwitter_2D.png")
-                if save_2d_structure_image(zwitter_smiles, zwitter_png_path):
-                    zwitter_saved_files["png_2d"] = zwitter_png_path
-                
-                # Collect warnings
-                for warning in zwitter_save_result["warnings"]:
-                    if warning not in format_warnings:
-                        format_warnings.append(warning)
-                
-                # Create result entry for zwitterion
-                zwitter_entry = {
-                    "name": f"{pretty_name}_zwitter",
-                    "base_smiles": base_smiles,
-                    "ph_smiles": zwitter_smiles,
-                    "pka_pred": pka_pred,
-                    "formal_charge": zwitter_charge,
-                    "is_zwitterion": True,
-                }
-                
-                if stereo:
-                    zwitter_entry["stereoisomer_id"] = stereo
-                
-                if "pdb" in zwitter_saved_files:
-                    zwitter_entry["minimized_pdb"] = zwitter_saved_files["pdb"]
-                if "sdf" in zwitter_saved_files:
-                    zwitter_entry["minimized_sdf"] = zwitter_saved_files["sdf"]
-                if "mol2" in zwitter_saved_files:
-                    zwitter_entry["minimized_mol2"] = zwitter_saved_files["mol2"]
-                
-                results.append(zwitter_entry)
-                print(f"✓ Generated zwitterion form for {pretty_name}")
-                
-            except Exception as e:
-                print(f"Warning: Zwitterion generation failed for {pretty_name}: {e}")
-                warning_msg = f"Zwitterion generation failed for {pretty_name}: {str(e)}"
-                if warning_msg not in format_warnings:
-                    format_warnings.append(warning_msg)
-
     # Write summary file
     summary_lines = []
     summary_lines.append("=" * 80)
     summary_lines.append("pKaNET Cloud - Analysis Summary")
     summary_lines.append("=" * 80)
     summary_lines.append(f"Target pH: {target_pH}")
+    summary_lines.append(f"Charge mode: {charge_mode}")
     summary_lines.append(f"Stereoisomer enumeration: {'Enabled' if enumerate_stereoisomers else 'Disabled'}")
-    summary_lines.append(f"Zwitterion generation: {'Enabled' if generate_zwitterion else 'Disabled'}")
     summary_lines.append(f"Total structures generated: {len(results)}")
+    summary_lines.append(f"pKa: {'IUPAC (if matched) → else pKaPredict (ML)' if use_iupac_pka else 'pKaPredict (ML)'}")
+    summary_lines.append("Zwitterion (strict): has + and − atoms AND net charge = 0")
     summary_lines.append("=" * 80)
     summary_lines.append("")
     
@@ -666,12 +727,17 @@ def run_job(
         summary_lines.append(f"  pH-adjusted SMILES   : {r['ph_smiles']}")
         
         # Format pKa value safely
-        pka_value = f"{r['pka_pred']:.2f}" if r['pka_pred'] is not None else "N/A"
-        summary_lines.append(f"  Predicted pKa        : {pka_value}")
+        if r['pka_pred'] is not None:
+            pka_str = f"{r['pka_pred']:.2f}"
+            if r.get('pka_source'):
+                pka_str += f" ({r['pka_source']})"
+            summary_lines.append(f"  Predicted pKa        : {pka_str}")
+        else:
+            summary_lines.append(f"  Predicted pKa        : N/A")
+            
         summary_lines.append(f"  Formal Charge (pH {target_pH}): {r['formal_charge']:+d}")
-        
-        if r.get('is_zwitterion', False):
-            summary_lines.append(f"  Form                 : Zwitterion")
+        summary_lines.append(f"  Zwitterion (strict)  : {'YES' if r.get('is_zwitterion') else 'NO'}")
+        summary_lines.append(f"  + atoms / − atoms    : {r.get('n_pos_atoms', 0)} / {r.get('n_neg_atoms', 0)}")
         
         # Show what formats were actually generated
         generated_formats = []
@@ -688,7 +754,7 @@ def run_job(
         summary_lines.append("")
     
     summary_lines.append("=" * 80)
-    summary_lines.append("pKa Prediction powered by pKaPredict (ML-based)")
+    summary_lines.append("pKa: IUPAC (if matched) → pKaPredict (ML-based)")
     summary_lines.append("=" * 80)
     
     summary_text = "\n".join(summary_lines).strip()
@@ -699,19 +765,20 @@ def run_job(
         log_lines = []
         log_lines.append("# pKaNET Cloud - Processing Log")
         log_lines.append(f"# Target pH: {target_pH}")
+        log_lines.append(f"# Charge mode: {charge_mode}")
         log_lines.append(f"# Stereoisomer enumeration: {'enabled' if enumerate_stereoisomers else 'disabled'}")
-        log_lines.append(f"# Zwitterion generation: {'enabled' if generate_zwitterion else 'disabled'}")
         log_lines.append(f"# Total molecules processed: {len(results)}")
-        log_lines.append(f"# pKa prediction: pKaPredict (Machine Learning)")
+        log_lines.append(f"# pKa: {'IUPAC (if matched) → pKaPredict (ML)' if use_iupac_pka else 'pKaPredict (ML)'}")
         log_lines.append("#" + "="*70)
         log_lines.append("")
-        log_lines.append("# Columns: Name | pH-adjusted SMILES | Formal Charge | Predicted pKa | Form")
+        log_lines.append("# Columns: Name | pH-adjusted SMILES | Formal Charge | Predicted pKa | pKa Source | Zwitterion")
         log_lines.append("")
         
         for r in results:
             pka_str = f"{r['pka_pred']:.2f}" if r["pka_pred"] is not None else "N/A"
-            form = "Zwitterion" if r.get('is_zwitterion', False) else "Standard"
-            log_lines.append(f"{r['name']}\t{r['ph_smiles']}\t{r['formal_charge']:+d}\t{pka_str}\t{form}")
+            pka_src = r.get("pka_source", "-")
+            zw = "Yes" if r.get("is_zwitterion") else "No"
+            log_lines.append(f"{r['name']}\t{r['ph_smiles']}\t{r['formal_charge']:+d}\t{pka_str}\t{pka_src}\t{zw}")
         
         (out / "processing.log").write_text("\n".join(log_lines) + "\n")
 
