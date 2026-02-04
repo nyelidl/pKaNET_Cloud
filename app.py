@@ -57,7 +57,7 @@ st.markdown(
     'Machine-Learning–Driven Protonation & pH-Aware 3D Structure Generation<br>'
     '<span style="font-size:0.9em; font-weight:normal;">'
     'Instant pH-aware 3D structures for docking, virtual screening, and education – '
-    'with automatic R/S stereoisomer enumeration and zwitterion generation.'
+    'with automatic R/S stereoisomer enumeration and zwitterion control.'
     '</span>'
     '</div>',
     unsafe_allow_html=True
@@ -74,26 +74,42 @@ st.markdown(
 # Sidebar configuration
 st.sidebar.header("⚙️ Input / Options")
 input_type = st.sidebar.selectbox("Input type", ["SMILES", "SMI_FILE", "FILE"])
-target_pH = st.sidebar.slider("Target pH", 2.0, 12.0, 7.0, 0.1)
+target_pH = st.sidebar.slider("Target pH", 2.0, 12.0, 7.4, 0.1)
 output_name = st.sidebar.text_input("Output name (for single SMILES/FILE)", value="ligand")
 
 # Add stereoisomer enumeration option
-st.sidebar.header("🧬 Stereochemistry & Ionization")
+st.sidebar.header("🧬 Stereochemistry")
 enumerate_stereoisomers = st.sidebar.checkbox(
     "Enumerate R/S stereoisomers",
     value=True,
-    help="Automatically generate all possible R/S stereoisomers for undefined chiral centers"
+    help="Automatically generate both R and S stereoisomers for undefined chiral centers. If unchecked, keeps original stereochemistry as-is."
 )
 
-# Add zwitterion generation option
-generate_zwitterion = st.sidebar.checkbox(
-    "Generate Zwitterion forms",
-    value=False,
-    help="Generate zwitterionic forms for molecules with both acidic (COOH, sulfonamide NH) and basic (NH2, piperidine) groups. This creates an additional structure with deprotonated acid and protonated base."
+# Add charge mode selection
+st.sidebar.header("⚡ Charge Mode")
+charge_mode = st.sidebar.selectbox(
+    "Protonation state selection",
+    ["AUTO", "FORCE_ZWITTERION", "NORMAL"],
+    index=0,
+    help="""
+    - AUTO: Use Dimorphite-DL dominant microspecies (first variant)
+    - FORCE_ZWITTERION: Return strict zwitterion if present; else most neutral
+    - NORMAL: Choose most neutral state (smallest |net charge|)
+    
+    Zwitterion (strict): has both + and − atoms AND net charge = 0
+    """
 )
 
-if generate_zwitterion:
-    st.sidebar.info("💡 Zwitterion generation: Molecules with carboxyl (-COOH) and amino (-NH2) groups will have an additional zwitterionic form (±) generated alongside the standard protonation state.")
+if charge_mode == "FORCE_ZWITTERION":
+    st.sidebar.info("🧷 **Zwitterion mode**: Will prioritize structures with both positive and negative atoms and net charge = 0")
+
+# pKa source selection
+st.sidebar.header("🔬 pKa Prediction")
+use_iupac_pka = st.sidebar.checkbox(
+    "Use IUPAC pKa database (when available)",
+    value=True,
+    help="Try to match molecule against IUPAC high-confidence pKa dataset first, then fall back to pKaPredict ML model"
+)
 
 st.sidebar.header("📄 Output Format")
 output_formats = st.sidebar.multiselect(
@@ -123,7 +139,7 @@ uploaded = None
 # Input section
 if input_type == "SMILES":
     smiles_text = st.text_area(
-        "SMILES\nexample: CC(C)CC1=CC=C(C=C1)C(C)C(=O)O (Ibuprofen - can form zwitterion)",
+        "SMILES\nexample: O=S(NC1=NC(C2=CN(C(CC#N)C3CCCC3)N=C2)=C(C=CN4)C4=N1)(C5=CC=C(C6CCNCC6)C=C5)=O",
         height=120,
         placeholder="Paste a SMILES here:",
     )
@@ -200,18 +216,23 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
     with info_col2:
         st.markdown(f"**Target pH:** `{target_pH}`")
         if result["pka_pred"] is not None:
-            st.markdown(f"**Predicted pKa (pKaPredict):** `{result['pka_pred']:.2f}`")
+            pka_source = result.get("pka_source", "pKaPredict")
+            st.markdown(f"**Predicted pKa ({pka_source}):** `{result['pka_pred']:.2f}`")
         else:
-            st.markdown(f"**Predicted pKa (pKaPredict):** `N/A` ⚠️")
+            st.markdown(f"**Predicted pKa:** `N/A` ⚠️")
             st.caption("⚠️ pKa prediction unavailable - check warnings below")
-        st.markdown(f"**Formal Charge at pH {target_pH}:** `{result['formal_charge']:+d}`")
+        st.markdown(f"**Net Formal Charge at pH {target_pH}:** `{result['formal_charge']:+d}`")
         
-        # Show if this is a zwitterion
+        # Show zwitterion status
         if result.get('is_zwitterion', False):
-            st.markdown("**Form:** `Zwitterion (±)` 🔋")
-            st.caption("This structure has both COO⁻ and NH3⁺ groups")
+            st.markdown("**Zwitterion (strict):** `YES` 🧷")
+            st.caption(f"✓ Has {result.get('n_pos_atoms', 0)} positive and {result.get('n_neg_atoms', 0)} negative atoms, net charge = 0")
         else:
-            st.markdown("**Form:** `Standard protonation`")
+            if result.get('has_pos', False) and result.get('has_neg', False):
+                st.markdown("**Zwitterion (strict):** `NO`")
+                st.caption(f"Has {result.get('n_pos_atoms', 0)} positive and {result.get('n_neg_atoms', 0)} negative atoms, but net charge ≠ 0")
+            else:
+                st.markdown("**Zwitterion (strict):** `NO`")
         
         # Show stereoisomer info if available
         if "stereoisomer_id" in result:
@@ -329,7 +350,8 @@ if run_btn:
                         out_dir=str(out_dir),
                         output_formats=output_formats,
                         enumerate_stereoisomers=enumerate_stereoisomers,
-                        generate_zwitterion=generate_zwitterion,
+                        charge_mode=charge_mode,
+                        use_iupac_pka=use_iupac_pka,
                     )
 
                     st.success("✅ Analysis complete!")
@@ -338,20 +360,14 @@ if run_btn:
                     if "format_warnings" in out and out["format_warnings"]:
                         # Separate pKa warnings from format warnings
                         pka_warnings = [w for w in out["format_warnings"] if "pKa prediction failed" in w]
-                        zwitter_warnings = [w for w in out["format_warnings"] if "Zwitterion generation failed" in w]
                         info_warnings = [w for w in out["format_warnings"] if w.startswith("ℹ️")]
-                        other_warnings = [w for w in out["format_warnings"] if w not in pka_warnings and w not in info_warnings and w not in zwitter_warnings]
+                        other_warnings = [w for w in out["format_warnings"] if w not in pka_warnings and w not in info_warnings]
                         
                         if pka_warnings:
                             with st.expander("⚠️ pKa Prediction Warnings", expanded=True):
                                 for warning in pka_warnings:
                                     st.warning(warning)
                                 st.info("💡 **Note:** pKa prediction may fail for certain molecular structures. The pH-adjusted structure and formal charge are still calculated correctly using Dimorphite-DL.")
-                        
-                        if zwitter_warnings:
-                            with st.expander("⚠️ Zwitterion Generation Warnings", expanded=False):
-                                for warning in zwitter_warnings:
-                                    st.warning(warning)
                         
                         if other_warnings:
                             with st.expander("⚠️ Format Warnings", expanded=False):
@@ -374,8 +390,8 @@ if run_btn:
                         info_parts = []
                         if enumerate_stereoisomers and stereoisomers > 0:
                             info_parts.append(f"🧬 {stereoisomers} stereoisomer type(s)")
-                        if generate_zwitterion and zwitterions > 0:
-                            info_parts.append(f"🔋 {zwitterions} zwitterion form(s)")
+                        if zwitterions > 0:
+                            info_parts.append(f"🧷 {zwitterions} zwitterion(s) (strict)")
                         
                         if info_parts:
                             st.info(f"Generated {total} total structure(s): {', '.join(info_parts)}")
@@ -413,7 +429,7 @@ if run_btn:
                             file_name="pkanet_processing.log",
                             mime="text/plain",
                             use_container_width=True,
-                            help="Tab-separated file with: Name | pH-adjusted SMILES | Charge | pKa | Form"
+                            help="Tab-separated file with: Name | pH-adjusted SMILES | Charge | pKa | Source | Zwitterion"
                         )
                         st.markdown("---")
                     
@@ -463,17 +479,16 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ℹ️ About")
 st.sidebar.info("""
 **pKaNET Cloud** uses:
+- **IUPAC pKa database** for high-confidence matches
 - **pKaPredict** for ML-based pKa prediction
 - **Dimorphite-DL** for pH-dependent protonation
 - **RDKit** for 3D structure generation
 - **MMFF/UFF** for energy minimization
 
-**Zwitterion Feature:**
-Automatically detects molecules with:
-- **Acidic groups:** Carboxylic acid (-COOH), Sulfonamide (-SO2NH-)
-- **Basic groups:** Primary/secondary amines (-NH2, -NH-), Piperidine
-
-Generates zwitterionic forms with deprotonated acid and protonated base.
+**Charge Modes:**
+- **AUTO**: Dimorphite-DL dominant microspecies
+- **FORCE_ZWITTERION**: Prioritize strict zwitterions (has + and − atoms, net charge = 0)
+- **NORMAL**: Most neutral state (smallest |net charge|)
 """)
 
 st.sidebar.markdown("### 📚 Citation")
@@ -490,19 +505,16 @@ which inspired **pKaNET-Cloud**.
 
 st.sidebar.markdown("### 💡 Example")
 st.sidebar.markdown("""
-**Amino acids** (COOH + NH2):
+Try **Glycine** (simplest amino acid):
 ```
 C(C(=O)O)N
 ```
-(Glycine)
-
-**Sulfonamide drugs** (SO2NH + amine):
+Or **M1-2-C0** (sulfonamide with piperidine):
 ```
-CC1=CC=C(C=C1)S(=O)(=O)NC2=NC(=CS2)C
+O=S(NC1=NC(C2=CN(C(CC#N)C3CCCC3)N=C2)
+=C(C=CN4)C4=N1)(C5=CC=C(C6CCNCC6)C=C5)=O
 ```
-(Contains sulfonamide NH and heterocycle N)
-
-These molecules can form zwitterions!
+Use **FORCE_ZWITTERION** mode for zwitterionic forms!
 """)
 
 # Footer
