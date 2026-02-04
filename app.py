@@ -57,7 +57,7 @@ st.markdown(
     'Machine-Learning–Driven Protonation & pH-Aware 3D Structure Generation<br>'
     '<span style="font-size:0.9em; font-weight:normal;">'
     'Instant pH-aware 3D structures for docking, virtual screening, and education – '
-    'with automatic R/S stereoisomer enumeration.'
+    'with automatic R/S stereoisomer enumeration and zwitterion generation.'
     '</span>'
     '</div>',
     unsafe_allow_html=True
@@ -78,12 +78,22 @@ target_pH = st.sidebar.slider("Target pH", 2.0, 12.0, 7.0, 0.1)
 output_name = st.sidebar.text_input("Output name (for single SMILES/FILE)", value="ligand")
 
 # Add stereoisomer enumeration option
-st.sidebar.header("🧬 Stereochemistry")
+st.sidebar.header("🧬 Stereochemistry & Ionization")
 enumerate_stereoisomers = st.sidebar.checkbox(
     "Enumerate R/S stereoisomers",
     value=True,
     help="Automatically generate all possible R/S stereoisomers for undefined chiral centers"
 )
+
+# Add zwitterion generation option
+generate_zwitterion = st.sidebar.checkbox(
+    "Generate Zwitterion forms",
+    value=False,
+    help="Generate zwitterionic forms for molecules with both acidic (e.g., COOH) and basic (e.g., NH2) groups. This will create an additional structure with deprotonated acid (COO⁻) and protonated base (NH3⁺)."
+)
+
+if generate_zwitterion:
+    st.sidebar.info("💡 Zwitterion generation: Molecules with carboxyl (-COOH) and amino (-NH2) groups will have an additional zwitterionic form (±) generated alongside the standard protonation state.")
 
 st.sidebar.header("📄 Output Format")
 output_formats = st.sidebar.multiselect(
@@ -113,7 +123,7 @@ uploaded = None
 # Input section
 if input_type == "SMILES":
     smiles_text = st.text_area(
-        "SMILES\nexample: CC(C)CC1=CC=C(C=C1)C(C)C(=O)O",
+        "SMILES\nexample: CC(C)CC1=CC=C(C=C1)C(C)C(=O)O (Ibuprofen - can form zwitterion)",
         height=120,
         placeholder="Paste a SMILES here:",
     )
@@ -195,6 +205,14 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
             st.markdown(f"**Predicted pKa (pKaPredict):** `N/A` ⚠️")
             st.caption("⚠️ pKa prediction unavailable - check warnings below")
         st.markdown(f"**Formal Charge at pH {target_pH}:** `{result['formal_charge']:+d}`")
+        
+        # Show if this is a zwitterion
+        if result.get('is_zwitterion', False):
+            st.markdown("**Form:** `Zwitterion (±)` 🔋")
+            st.caption("This structure has both COO⁻ and NH3⁺ groups")
+        else:
+            st.markdown("**Form:** `Standard protonation`")
+        
         # Show stereoisomer info if available
         if "stereoisomer_id" in result:
             st.markdown(f"**Stereoisomer:** `{result['stereoisomer_id']}`")
@@ -205,51 +223,57 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
         
         if show_2d and show_3d:
             viz_col1, viz_col2 = st.columns(2)
-        else:
-            viz_col1 = st.container()
-            viz_col2 = None
-        
-        # 2D Structure
-        if show_2d:
+            
             with viz_col1:
-                st.markdown("**2D Structure (pH-adjusted)**")
-                if DRAW_AVAILABLE:
-                    img_2d = draw_molecule_2d(result["ph_smiles"], size=(400, 300))
-                    if img_2d:
-                        st.image(img_2d, use_container_width=True)
+                st.markdown("**2D Structure**")
+                if show_2d and DRAW_AVAILABLE:
+                    img = draw_molecule_2d(result["ph_smiles"], size=(400, 300))
+                    if img:
+                        st.image(img, use_container_width=True)
                     else:
                         st.warning("Could not generate 2D structure")
-                else:
-                    st.info("2D visualization requires additional system libraries")
-                    st.code(result["ph_smiles"], language=None)
-        
-        # 3D Structure - Always use SDF
-        if show_3d:
-            target_col = viz_col2 if viz_col2 else viz_col1
-            with target_col:
-                st.markdown("**🧊 3D Minimized Structure**")
-                
-                # Always use SDF for 3D visualization
-                if "minimized_sdf" in result and result["minimized_sdf"]:
-                    sdf_path = Path(result["minimized_sdf"])
-                    if sdf_path.exists():
-                        try:
-                            with open(sdf_path, "r") as f:
-                                sdf_data = f.read()
-                            
-                            # Escape special characters for JavaScript
-                            sdf_data = sdf_data.replace('`', '\\`').replace('${', '\\${')
-                            
-                            viewer_html = create_3dmol_viewer(sdf_data, viewer_width, viewer_height)
-                            components.html(viewer_html, height=viewer_height + 50, scrolling=False)
-                            
-                            st.caption("🖱️ Click and drag to rotate • Scroll to zoom")
-                        except Exception as e:
-                            st.warning(f"⚠️ 3D visualization failed: {e}")
+            
+            with viz_col2:
+                st.markdown("**3D Structure**")
+                if show_3d:
+                    if "minimized_sdf" in result:
+                        sdf_path = Path(result["minimized_sdf"])
+                        if sdf_path.exists():
+                            try:
+                                sdf_content = sdf_path.read_text()
+                                viewer_html = create_3dmol_viewer(sdf_content, width=viewer_width, height=viewer_height)
+                                components.html(viewer_html, height=viewer_height + 20, scrolling=False)
+                            except Exception as e:
+                                st.warning(f"⚠️ 3D visualization failed: {e}")
+                        else:
+                            st.warning("3D structure file not found")
                     else:
-                        st.warning("3D structure file not found")
+                        st.warning("SDF file not available for 3D visualization")
+        
+        elif show_2d:
+            st.markdown("**2D Structure**")
+            if DRAW_AVAILABLE:
+                img = draw_molecule_2d(result["ph_smiles"], size=(600, 400))
+                if img:
+                    st.image(img, use_container_width=True)
                 else:
-                    st.warning("SDF file not available for 3D visualization")
+                    st.warning("Could not generate 2D structure")
+        
+        elif show_3d:
+            st.markdown("**3D Structure**")
+            if "minimized_sdf" in result:
+                sdf_path = Path(result["minimized_sdf"])
+                if sdf_path.exists():
+                    try:
+                        sdf_content = sdf_path.read_text()
+                        viewer_html = create_3dmol_viewer(sdf_content, width=viewer_width, height=viewer_height)
+                        components.html(viewer_html, height=viewer_height + 20, scrolling=False)
+                    except Exception as e:
+                        st.warning(f"⚠️ 3D visualization failed: {e}")
+                else:
+                    st.warning("3D structure file not found")
+            else:
+                st.warning("SDF file not available for 3D visualization")
     
     # File information - show what was actually generated
     with st.expander("📁 Output Files"):
@@ -305,6 +329,7 @@ if run_btn:
                         out_dir=str(out_dir),
                         output_formats=output_formats,
                         enumerate_stereoisomers=enumerate_stereoisomers,
+                        generate_zwitterion=generate_zwitterion,
                     )
 
                     st.success("✅ Analysis complete!")
@@ -313,14 +338,20 @@ if run_btn:
                     if "format_warnings" in out and out["format_warnings"]:
                         # Separate pKa warnings from format warnings
                         pka_warnings = [w for w in out["format_warnings"] if "pKa prediction failed" in w]
+                        zwitter_warnings = [w for w in out["format_warnings"] if "Zwitterion generation failed" in w]
                         info_warnings = [w for w in out["format_warnings"] if w.startswith("ℹ️")]
-                        other_warnings = [w for w in out["format_warnings"] if w not in pka_warnings and w not in info_warnings]
+                        other_warnings = [w for w in out["format_warnings"] if w not in pka_warnings and w not in info_warnings and w not in zwitter_warnings]
                         
                         if pka_warnings:
                             with st.expander("⚠️ pKa Prediction Warnings", expanded=True):
                                 for warning in pka_warnings:
                                     st.warning(warning)
                                 st.info("💡 **Note:** pKa prediction may fail for certain molecular structures. The pH-adjusted structure and formal charge are still calculated correctly using Dimorphite-DL.")
+                        
+                        if zwitter_warnings:
+                            with st.expander("⚠️ Zwitterion Generation Warnings", expanded=False):
+                                for warning in zwitter_warnings:
+                                    st.warning(warning)
                         
                         if other_warnings:
                             with st.expander("⚠️ Format Warnings", expanded=False):
@@ -331,11 +362,23 @@ if run_btn:
                             for warning in info_warnings:
                                 st.info(warning)
                     
-                    # Display summary with stereoisomer info
+                    # Display summary with stereoisomer and zwitterion info
                     with st.expander("📊 Summary", expanded=True):
                         st.text(out["summary_text"])
-                        if enumerate_stereoisomers and len(out["results"]) > 1:
-                            st.info(f"🧬 Generated {len(out['results'])} stereoisomer(s)")
+                        
+                        # Count different types of structures
+                        total = len(out["results"])
+                        zwitterions = sum(1 for r in out["results"] if r.get('is_zwitterion', False))
+                        stereoisomers = len(set(r.get('stereoisomer_id') for r in out["results"] if 'stereoisomer_id' in r))
+                        
+                        info_parts = []
+                        if enumerate_stereoisomers and stereoisomers > 0:
+                            info_parts.append(f"🧬 {stereoisomers} stereoisomer type(s)")
+                        if generate_zwitterion and zwitterions > 0:
+                            info_parts.append(f"🔋 {zwitterions} zwitterion form(s)")
+                        
+                        if info_parts:
+                            st.info(f"Generated {total} total structure(s): {', '.join(info_parts)}")
                     
                     # Display results for each ligand
                     st.header("📈 Results")
@@ -370,7 +413,7 @@ if run_btn:
                             file_name="pkanet_processing.log",
                             mime="text/plain",
                             use_container_width=True,
-                            help="Tab-separated file with: Name | pH-adjusted SMILES | Charge | pKa"
+                            help="Tab-separated file with: Name | pH-adjusted SMILES | Charge | pKa | Form"
                         )
                         st.markdown("---")
                     
@@ -424,6 +467,9 @@ st.sidebar.info("""
 - **Dimorphite-DL** for pH-dependent protonation
 - **RDKit** for 3D structure generation
 - **MMFF/UFF** for energy minimization
+
+**Zwitterion Feature:**
+Automatically detects molecules with carboxylic acid (-COOH) and amino (-NH2) groups and generates zwitterionic forms (COO⁻ and NH3⁺) when enabled.
 """)
 
 st.sidebar.markdown("### 📚 Citation")
@@ -436,6 +482,19 @@ We thank **Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodro
 for developing **pKaPredict** and the study *"Machine Learning Meets pKa"*,
 which inspired **pKaNET-Cloud**.
 
+""")
+
+st.sidebar.markdown("### 💡 Example")
+st.sidebar.markdown("""
+Try **Ibuprofen** (has both COOH and aromatic-bound alkyl):
+```
+CC(C)CC1=CC=C(C=C1)C(C)C(=O)O
+```
+Or **Glycine** (simplest amino acid):
+```
+C(C(=O)O)N
+```
+These molecules can form zwitterions!
 """)
 
 # Footer
