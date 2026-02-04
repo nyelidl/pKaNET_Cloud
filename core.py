@@ -259,6 +259,20 @@ def generate_RS_variants(base_smiles: str, base_name: str):
     if mol is None:
         return [{"name": base_name, "stereo": None, "base_smiles": base_smiles}]
 
+    # Assign stereochemistry to the original molecule
+    Chem.AssignStereochemistry(mol, force=True, cleanIt=True)
+    centers = Chem.FindMolChiralCenters(mol, includeUnassigned=False)
+    
+    # If no chiral centers, return as is
+    if not centers:
+        return [{"name": base_name, "stereo": None, "base_smiles": base_smiles}]
+    
+    # If more than 1 chiral center, return only the original form
+    if len(centers) > 1:
+        print(f"ℹ️ {base_name}: Multiple chiral centers detected ({len(centers)}), keeping original stereochemistry")
+        return [{"name": base_name, "stereo": None, "base_smiles": base_smiles}]
+    
+    # Only 1 chiral center - enumerate R/S variants
     opts = StereoEnumerationOptions(onlyUnassigned=False)
     isomers = list(EnumerateStereoisomers(mol, options=opts))
 
@@ -266,22 +280,15 @@ def generate_RS_variants(base_smiles: str, base_name: str):
         iso_smiles = Chem.MolToSmiles(isomers[0], isomericSmiles=True)
         return [{"name": base_name, "stereo": None, "base_smiles": iso_smiles}]
 
-    iso0 = isomers[0]
-    Chem.AssignStereochemistry(iso0, force=True, cleanIt=True)
-    centers0 = Chem.FindMolChiralCenters(iso0, includeUnassigned=False)
-    if not centers0:
-        iso_smiles = Chem.MolToSmiles(isomers[0], isomericSmiles=True)
-        return [{"name": base_name, "stereo": None, "base_smiles": iso_smiles}]
-
-    target_idx = centers0[0][0]
+    target_idx = centers[0][0]
     variants = []
     used = set()
 
     for iso in isomers:
         Chem.AssignStereochemistry(iso, force=True, cleanIt=True)
-        centers = Chem.FindMolChiralCenters(iso, includeUnassigned=False)
+        iso_centers = Chem.FindMolChiralCenters(iso, includeUnassigned=False)
         label_here = None
-        for idx, label in centers:
+        for idx, label in iso_centers:
             if idx == target_idx and label in ("R", "S"):
                 label_here = label
                 break
