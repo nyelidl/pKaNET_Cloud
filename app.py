@@ -89,7 +89,7 @@ enumerate_stereoisomers = st.sidebar.checkbox(
 generate_zwitterion = st.sidebar.checkbox(
     "Generate Zwitterion forms",
     value=False,
-    help="Generate zwitterionic forms for molecules with both acidic (e.g., COOH) and basic (e.g., NH2) groups. This will create an additional structure with deprotonated acid (COO⁻) and protonated base (NH3⁺)."
+    help="Generate zwitterionic forms for molecules with both acidic (COOH, sulfonamide NH) and basic (NH2, piperidine) groups. This creates an additional structure with deprotonated acid and protonated base."
 )
 
 if generate_zwitterion:
@@ -469,7 +469,11 @@ st.sidebar.info("""
 - **MMFF/UFF** for energy minimization
 
 **Zwitterion Feature:**
-Automatically detects molecules with carboxylic acid (-COOH) and amino (-NH2) groups and generates zwitterionic forms (COO⁻ and NH3⁺) when enabled.
+Automatically detects molecules with:
+- **Acidic groups:** Carboxylic acid (-COOH), Sulfonamide (-SO2NH-)
+- **Basic groups:** Primary/secondary amines (-NH2, -NH-), Piperidine
+
+Generates zwitterionic forms with deprotonated acid and protonated base.
 """)
 
 st.sidebar.markdown("### 📚 Citation")
@@ -486,14 +490,18 @@ which inspired **pKaNET-Cloud**.
 
 st.sidebar.markdown("### 💡 Example")
 st.sidebar.markdown("""
-Try **Ibuprofen** (has both COOH and aromatic-bound alkyl):
-```
-CC(C)CC1=CC=C(C=C1)C(C)C(=O)O
-```
-Or **Glycine** (simplest amino acid):
+**Amino acids** (COOH + NH2):
 ```
 C(C(=O)O)N
 ```
+(Glycine)
+
+**Sulfonamide drugs** (SO2NH + amine):
+```
+CC1=CC=C(C=C1)S(=O)(=O)NC2=NC(=CS2)C
+```
+(Contains sulfonamide NH and heterocycle N)
+
 These molecules can form zwitterions!
 """)
 
