@@ -1,5 +1,7 @@
 import streamlit as st
 import tempfile
+import subprocess
+import shutil
 from pathlib import Path
 from core import run_job, zip_all_outputs, zip_minimized_structures
 import streamlit.components.v1 as components
@@ -75,34 +77,56 @@ st.markdown(
 
 def pdb_to_canonical_smiles(pdb_bytes: bytes) -> tuple[str | None, str | None]:
     """
-    Convert PDB file bytes to a canonical SMILES string using RDKit.
+    Convert PDB file bytes to a canonical SMILES string using Open Babel:
+        obabel input.pdb -O output.smi --canonical
 
     Returns
     -------
     (smiles, error_message)
         smiles is None when conversion fails; error_message is None on success.
     """
+    if shutil.which("obabel") is None:
+        return None, (
+            "Open Babel (obabel) is not installed or not found in PATH. "
+            "Please install it: conda install -c conda-forge openbabel"
+        )
+
     try:
-        pdb_block = pdb_bytes.decode("utf-8", errors="replace")
-        mol = Chem.MolFromPDBBlock(pdb_block, removeHs=True, sanitize=True)
-        if mol is None:
-            # Try without sanitization, then sanitize manually
-            mol = Chem.MolFromPDBBlock(pdb_block, removeHs=True, sanitize=False)
-            if mol is None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pdb_file = tmp / "input.pdb"
+            smi_file = tmp / "output.smi"
+
+            pdb_file.write_bytes(pdb_bytes)
+
+            result = subprocess.run(
+                ["obabel", str(pdb_file), "-O", str(smi_file), "--canonical"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if not smi_file.exists() or smi_file.stat().st_size == 0:
+                stderr = result.stderr.strip()
                 return None, (
-                    "RDKit could not parse the PDB file. "
-                    "Make sure it contains a valid small-molecule HETATM block."
+                    f"obabel produced no output. "
+                    f"stderr: {stderr or '(none)'}"
                 )
-            try:
-                Chem.SanitizeMol(mol)
-            except Exception as san_err:
-                return None, f"Sanitization failed: {san_err}"
 
-        smiles = Chem.MolToSmiles(mol, canonical=True)
-        if not smiles:
-            return None, "RDKit produced an empty SMILES string."
-        return smiles, None
+            # obabel .smi output format: "<SMILES>\t<name>" per line
+            raw = smi_file.read_text(encoding="utf-8", errors="replace").strip()
+            if not raw:
+                return None, "obabel produced an empty SMILES file."
 
+            # Take first non-empty line, strip optional tab-separated name
+            smiles = raw.splitlines()[0].split()[0].strip()
+            if not smiles:
+                return None, "Could not parse SMILES from obabel output."
+
+            return smiles, None
+
+    except subprocess.TimeoutExpired:
+        return None, "obabel conversion timed out (>30 s)."
     except Exception as exc:
         return None, f"Unexpected error during PDB→SMILES conversion: {exc}"
 
