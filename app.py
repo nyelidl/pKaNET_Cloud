@@ -12,10 +12,8 @@ try:
     from rdkit.Chem import Draw
     DRAW_AVAILABLE = True
 except (ImportError, OSError) as e:
-    # RDKit Draw not available (missing X11 libraries on headless server)
     DRAW_AVAILABLE = False
     print(f"Warning: RDKit Draw not available: {e}")
-    # Create a fallback Draw module
     class DrawFallback:
         @staticmethod
         def MolToImage(*args, **kwargs):
@@ -71,13 +69,52 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# PDB → canonical SMILES conversion
+# ─────────────────────────────────────────────────────────────────────────────
+
+def pdb_to_canonical_smiles(pdb_bytes: bytes) -> tuple[str | None, str | None]:
+    """
+    Convert PDB file bytes to a canonical SMILES string using RDKit.
+
+    Returns
+    -------
+    (smiles, error_message)
+        smiles is None when conversion fails; error_message is None on success.
+    """
+    try:
+        pdb_block = pdb_bytes.decode("utf-8", errors="replace")
+        mol = Chem.MolFromPDBBlock(pdb_block, removeHs=True, sanitize=True)
+        if mol is None:
+            # Try without sanitization, then sanitize manually
+            mol = Chem.MolFromPDBBlock(pdb_block, removeHs=True, sanitize=False)
+            if mol is None:
+                return None, (
+                    "RDKit could not parse the PDB file. "
+                    "Make sure it contains a valid small-molecule HETATM block."
+                )
+            try:
+                Chem.SanitizeMol(mol)
+            except Exception as san_err:
+                return None, f"Sanitization failed: {san_err}"
+
+        smiles = Chem.MolToSmiles(mol, canonical=True)
+        if not smiles:
+            return None, "RDKit produced an empty SMILES string."
+        return smiles, None
+
+    except Exception as exc:
+        return None, f"Unexpected error during PDB→SMILES conversion: {exc}"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Sidebar configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
 st.sidebar.header("⚙️ Input / Options")
 input_type = st.sidebar.selectbox("Input type", ["SMILES", "SMI_FILE", "FILE"])
 target_pH = st.sidebar.slider("Target pH", 2.0, 12.0, 7.4, 0.1)
 output_name = st.sidebar.text_input("Output name (for single SMILES/FILE)", value="ligand")
 
-# Add stereoisomer enumeration option
 st.sidebar.header("🧬 Stereochemistry")
 enumerate_stereoisomers = st.sidebar.checkbox(
     "Enumerate R/S stereoisomers",
@@ -85,7 +122,6 @@ enumerate_stereoisomers = st.sidebar.checkbox(
     help="Automatically generate both R and S stereoisomers for undefined chiral centers. If unchecked, keeps original stereochemistry as-is."
 )
 
-# Add charge mode selection
 st.sidebar.header("⚡ Charge Mode")
 charge_mode = st.sidebar.selectbox(
     "Protonation state selection",
@@ -103,7 +139,6 @@ charge_mode = st.sidebar.selectbox(
 if charge_mode == "FORCE_ZWITTERION":
     st.sidebar.info("🧷 **Zwitterion mode**: Will prioritize structures with both positive and negative atoms and net charge = 0")
 
-# pKa source selection
 st.sidebar.header("🔬 pKa Prediction")
 use_iupac_pka = st.sidebar.checkbox(
     "Use IUPAC pKa database (when available)",
@@ -121,7 +156,6 @@ output_formats = st.sidebar.multiselect(
 if not output_formats:
     st.sidebar.warning("⚠️ Please select at least one output format")
 
-# Add visualization options
 st.sidebar.header("🎨 Visualization Options")
 if DRAW_AVAILABLE:
     show_2d = st.sidebar.checkbox("Show 2D structure", value=True)
@@ -133,10 +167,13 @@ show_3d = st.sidebar.checkbox("Show 3D structure", value=True)
 viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 300, 50)
 viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 300, 50)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Input widgets
+# ─────────────────────────────────────────────────────────────────────────────
+
 smiles_text = None
 uploaded = None
 
-# Input section
 if input_type == "SMILES":
     smiles_text = st.text_area(
         "SMILES\nexample: CC(C)CC1=CC=C(C=C1)C(C)C(=O)O",
@@ -151,20 +188,48 @@ elif input_type == "SMI_FILE":
     )
     st.info("📝 Format: `SMILES [optional_name]` per line")
 
-else:
+else:  # FILE (PDB)
     uploaded = st.file_uploader(
-        "Upload ligand file",
+        "Upload ligand PDB file",
         type=["pdb"],
     )
-    st.info("📝 Supported formats: PDB")
+    st.info(
+        "📝 The PDB file will be **automatically converted to canonical SMILES** "
+        "using RDKit before pKa prediction and 3D structure generation."
+    )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Live PDB → SMILES preview (shown as soon as a file is uploaded)
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Helper function for 2D visualization
+converted_smiles_from_pdb: str | None = None   # will be set below when applicable
+
+if input_type == "FILE" and uploaded is not None:
+    pdb_bytes = uploaded.read()          # read once; cached by Streamlit widget
+    converted_smiles_from_pdb, conv_err = pdb_to_canonical_smiles(pdb_bytes)
+
+    if conv_err:
+        st.error(f"❌ PDB → SMILES conversion failed: {conv_err}")
+    else:
+        st.success("✅ PDB converted to canonical SMILES successfully")
+        st.markdown("**Canonical SMILES extracted from PDB:**")
+        st.code(converted_smiles_from_pdb, language="text")
+        if DRAW_AVAILABLE:
+            mol_preview = Chem.MolFromSmiles(converted_smiles_from_pdb)
+            if mol_preview:
+                AllChem.Compute2DCoords(mol_preview)
+                img_preview = Draw.MolToImage(mol_preview, size=(400, 280))
+                if img_preview:
+                    st.image(img_preview, caption="2D preview of extracted structure")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper functions
+# ─────────────────────────────────────────────────────────────────────────────
+
 def draw_molecule_2d(smiles_str, size=(400, 300)):
-    """Generate 2D molecular structure image"""
+    """Generate 2D molecular structure image."""
     if not DRAW_AVAILABLE:
         return None
-    
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol is None:
@@ -176,9 +241,9 @@ def draw_molecule_2d(smiles_str, size=(400, 300)):
         st.warning(f"Could not generate 2D structure: {e}")
         return None
 
-# Helper function for 3D visualization
+
 def create_3dmol_viewer(sdf_content, width=400, height=300):
-    """Create py3Dmol viewer HTML - stick style with radius 0.2"""
+    """Create py3Dmol viewer HTML – stick style with radius 0.2."""
     html_template = f"""
     <div id="container" style="width: {width}px; height: {height}px; position: relative;"></div>
     <script src="https://3Dmol.csb.pitt.edu/build/3Dmol-min.js"></script>
@@ -186,9 +251,7 @@ def create_3dmol_viewer(sdf_content, width=400, height=300):
         let viewer = $3Dmol.createViewer(document.getElementById('container'), {{
             backgroundColor: 'white'
         }});
-        
         let sdfData = `{sdf_content}`;
-        
         viewer.addModel(sdfData, "sdf");
         viewer.setStyle({{}}, {{stick: {{radius: 0.2}}}});
         viewer.zoomTo();
@@ -197,22 +260,18 @@ def create_3dmol_viewer(sdf_content, width=400, height=300):
     """
     return html_template
 
-run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
-
 
 def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height):
-    """Display results for a single ligand"""
-    
-    # Molecular information
+    """Display results for a single ligand."""
+
     st.subheader("🔬 Molecular Information")
-    
     info_col1, info_col2 = st.columns(2)
-    
+
     with info_col1:
         st.markdown(f"**Name:** `{result['name']}`")
         st.markdown(f"**Base SMILES:** `{result['base_smiles']}`")
         st.markdown(f"**pH-adjusted SMILES:** `{result['ph_smiles']}`")
-    
+
     with info_col2:
         st.markdown(f"**Target pH:** `{target_pH}`")
         if result["pka_pred"] is not None:
@@ -220,10 +279,9 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
             st.markdown(f"**Predicted pKa ({pka_source}):** `{result['pka_pred']:.2f}`")
         else:
             st.markdown(f"**Predicted pKa:** `N/A` ⚠️")
-            st.caption("⚠️ pKa prediction unavailable - check warnings below")
+            st.caption("⚠️ pKa prediction unavailable – check warnings below")
         st.markdown(f"**Net Formal Charge at pH {target_pH}:** `{result['formal_charge']:+d}`")
-        
-        # Show zwitterion status
+
         if result.get('is_zwitterion', False):
             st.markdown("**Zwitterion (strict):** `YES` 🧷")
             st.caption(f"✓ Has {result.get('n_pos_atoms', 0)} positive and {result.get('n_neg_atoms', 0)} negative atoms, net charge = 0")
@@ -233,44 +291,39 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
                 st.caption(f"Has {result.get('n_pos_atoms', 0)} positive and {result.get('n_neg_atoms', 0)} negative atoms, but net charge ≠ 0")
             else:
                 st.markdown("**Zwitterion (strict):** `NO`")
-        
-        # Show stereoisomer info if available
+
         if "stereoisomer_id" in result:
             st.markdown(f"**Stereoisomer:** `{result['stereoisomer_id']}`")
-    
-    # Visualization section
+
     if show_2d or show_3d:
         st.subheader("🎨 Structure Visualization")
-        
+
         if show_2d and show_3d:
             viz_col1, viz_col2 = st.columns(2)
-            
             with viz_col1:
                 st.markdown("**2D Structure**")
-                if show_2d and DRAW_AVAILABLE:
+                if DRAW_AVAILABLE:
                     img = draw_molecule_2d(result["ph_smiles"], size=(400, 300))
                     if img:
                         st.image(img, use_container_width=True)
                     else:
                         st.warning("Could not generate 2D structure")
-            
             with viz_col2:
                 st.markdown("**3D Structure**")
-                if show_3d:
-                    if "minimized_sdf" in result:
-                        sdf_path = Path(result["minimized_sdf"])
-                        if sdf_path.exists():
-                            try:
-                                sdf_content = sdf_path.read_text()
-                                viewer_html = create_3dmol_viewer(sdf_content, width=viewer_width, height=viewer_height)
-                                components.html(viewer_html, height=viewer_height + 20, scrolling=False)
-                            except Exception as e:
-                                st.warning(f"⚠️ 3D visualization failed: {e}")
-                        else:
-                            st.warning("3D structure file not found")
+                if "minimized_sdf" in result:
+                    sdf_path = Path(result["minimized_sdf"])
+                    if sdf_path.exists():
+                        try:
+                            sdf_content = sdf_path.read_text()
+                            viewer_html = create_3dmol_viewer(sdf_content, width=viewer_width, height=viewer_height)
+                            components.html(viewer_html, height=viewer_height + 20, scrolling=False)
+                        except Exception as e:
+                            st.warning(f"⚠️ 3D visualization failed: {e}")
                     else:
-                        st.warning("SDF file not available for 3D visualization")
-        
+                        st.warning("3D structure file not found")
+                else:
+                    st.warning("SDF file not available for 3D visualization")
+
         elif show_2d:
             st.markdown("**2D Structure**")
             if DRAW_AVAILABLE:
@@ -279,7 +332,7 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
                     st.image(img, use_container_width=True)
                 else:
                     st.warning("Could not generate 2D structure")
-        
+
         elif show_3d:
             st.markdown("**3D Structure**")
             if "minimized_sdf" in result:
@@ -295,39 +348,43 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
                     st.warning("3D structure file not found")
             else:
                 st.warning("SDF file not available for 3D visualization")
-    
-    # File information - show what was actually generated
+
     with st.expander("📁 Output Files"):
         available_files = []
-        
-        # Check what files actually exist and display them
         if "minimized_pdb" in result and result["minimized_pdb"]:
             pdb_path = Path(result["minimized_pdb"])
             if pdb_path.exists():
                 available_files.append(f"- **PDB:** `{pdb_path.name}`")
-        
         if "minimized_mol2" in result and result["minimized_mol2"]:
             mol2_path = Path(result["minimized_mol2"])
             if mol2_path.exists():
                 available_files.append(f"- **MOL2:** `{mol2_path.name}`")
-        
         if "minimized_sdf" in result and result["minimized_sdf"]:
             sdf_path = Path(result["minimized_sdf"])
             if sdf_path.exists():
                 available_files.append(f"- **SDF:** `{sdf_path.name}` (for visualization)")
-        
         if available_files:
             st.markdown("\n".join(available_files))
         else:
             st.warning("No output files generated")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Run button
+# ─────────────────────────────────────────────────────────────────────────────
+
+run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
+
 if run_btn:
-    # Validation
+    # ── Validation ────────────────────────────────────────────────────────────
     if input_type == "SMILES" and not smiles_text:
         st.error("⚠️ Please enter a SMILES string")
-    elif input_type in ["SMI_FILE", "FILE"] and not uploaded:
-        st.error("⚠️ Please upload a file")
+    elif input_type == "SMI_FILE" and not uploaded:
+        st.error("⚠️ Please upload a .smi file")
+    elif input_type == "FILE" and not uploaded:
+        st.error("⚠️ Please upload a PDB file")
+    elif input_type == "FILE" and converted_smiles_from_pdb is None:
+        st.error("⚠️ PDB → SMILES conversion failed. Cannot proceed.")
     elif not output_formats:
         st.error("⚠️ Please select at least one output format")
     else:
@@ -336,92 +393,102 @@ if run_btn:
                 with tempfile.TemporaryDirectory() as tmp:
                     tmp = Path(tmp)
 
-                    uploaded_bytes = uploaded.read() if uploaded else None
-                    uploaded_name = uploaded.name if uploaded else None
+                    # ── Determine effective input for run_job ─────────────────
+                    if input_type == "FILE":
+                        # PDB was already converted above; feed as SMILES
+                        effective_input_type = "SMILES"
+                        effective_smiles    = converted_smiles_from_pdb
+                        effective_bytes     = None
+                        effective_name      = None
+                        st.info(
+                            f"🔄 Using canonical SMILES derived from PDB: "
+                            f"`{converted_smiles_from_pdb}`"
+                        )
+                    elif input_type == "SMILES":
+                        effective_input_type = "SMILES"
+                        effective_smiles    = smiles_text
+                        effective_bytes     = None
+                        effective_name      = None
+                    else:  # SMI_FILE
+                        effective_input_type = "SMI_FILE"
+                        effective_smiles    = None
+                        effective_bytes     = uploaded.read()
+                        effective_name      = uploaded.name
 
                     out_dir = tmp / "out"
                     out = run_job(
-                        input_type=input_type,
-                        smiles_text=smiles_text,
-                        uploaded_bytes=uploaded_bytes,
-                        uploaded_name=uploaded_name,
-                        target_pH=target_pH,
-                        output_name=output_name,
-                        out_dir=str(out_dir),
-                        output_formats=output_formats,
-                        enumerate_stereoisomers=enumerate_stereoisomers,
-                        charge_mode=charge_mode,
-                        use_iupac_pka=use_iupac_pka,
+                        input_type          = effective_input_type,
+                        smiles_text         = effective_smiles,
+                        uploaded_bytes      = effective_bytes,
+                        uploaded_name       = effective_name,
+                        target_pH           = target_pH,
+                        output_name         = output_name,
+                        out_dir             = str(out_dir),
+                        output_formats      = output_formats,
+                        enumerate_stereoisomers = enumerate_stereoisomers,
+                        charge_mode         = charge_mode,
+                        use_iupac_pka       = use_iupac_pka,
                     )
 
                     st.success("✅ Analysis complete!")
-                    
-                    # Show format warnings if any
+
+                    # ── Warnings ─────────────────────────────────────────────
                     if "format_warnings" in out and out["format_warnings"]:
-                        # Separate pKa warnings from format warnings
-                        pka_warnings = [w for w in out["format_warnings"] if "pKa prediction failed" in w]
-                        info_warnings = [w for w in out["format_warnings"] if w.startswith("ℹ️")]
-                        other_warnings = [w for w in out["format_warnings"] if w not in pka_warnings and w not in info_warnings]
-                        
+                        pka_warnings   = [w for w in out["format_warnings"] if "pKa prediction failed" in w]
+                        info_warnings  = [w for w in out["format_warnings"] if w.startswith("ℹ️")]
+                        other_warnings = [w for w in out["format_warnings"]
+                                          if w not in pka_warnings and w not in info_warnings]
+
                         if pka_warnings:
                             with st.expander("⚠️ pKa Prediction Warnings", expanded=True):
                                 for warning in pka_warnings:
                                     st.warning(warning)
-                                st.info("💡 **Note:** pKa prediction may fail for certain molecular structures. The pH-adjusted structure and formal charge are still calculated correctly using Dimorphite-DL.")
-                        
+                                st.info(
+                                    "💡 **Note:** pKa prediction may fail for certain molecular "
+                                    "structures. The pH-adjusted structure and formal charge are "
+                                    "still calculated correctly using Dimorphite-DL."
+                                )
                         if other_warnings:
                             with st.expander("⚠️ Format Warnings", expanded=False):
                                 for warning in other_warnings:
                                     st.warning(warning)
-                        
-                        if info_warnings:
-                            for warning in info_warnings:
-                                st.info(warning)
-                    
-                    # Display summary with stereoisomer and zwitterion info
+                        for warning in info_warnings:
+                            st.info(warning)
+
+                    # ── Summary ───────────────────────────────────────────────
                     with st.expander("📊 Summary", expanded=True):
                         st.text(out["summary_text"])
-                        
-                        # Count different types of structures
-                        total = len(out["results"])
-                        zwitterions = sum(1 for r in out["results"] if r.get('is_zwitterion', False))
-                        stereoisomers = len(set(r.get('stereoisomer_id') for r in out["results"] if 'stereoisomer_id' in r))
-                        
+                        total        = len(out["results"])
+                        zwitterions  = sum(1 for r in out["results"] if r.get('is_zwitterion', False))
+                        stereoisomers = len(set(
+                            r.get('stereoisomer_id') for r in out["results"]
+                            if 'stereoisomer_id' in r
+                        ))
                         info_parts = []
                         if enumerate_stereoisomers and stereoisomers > 0:
                             info_parts.append(f"🧬 {stereoisomers} stereoisomer type(s)")
                         if zwitterions > 0:
                             info_parts.append(f"🧷 {zwitterions} zwitterion(s) (strict)")
-                        
                         if info_parts:
                             st.info(f"Generated {total} total structure(s): {', '.join(info_parts)}")
-                    
-                    # Display results for each ligand
+
+                    # ── Per-ligand results ────────────────────────────────────
                     st.header("📈 Results")
-                    
                     results = out["results"]
-                    
-                    # Create tabs for multiple ligands or columns for single ligand
+
                     if len(results) > 1:
                         tabs = st.tabs([r["name"] for r in results])
-                        
                         for tab, result in zip(tabs, results):
                             with tab:
                                 display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
                     else:
-                        # Single ligand - use columns
-                        result = results[0]
-                        display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
-                    
-                    # Download section
+                        display_ligand_result(results[0], out_dir, show_2d, show_3d, viewer_width, viewer_height)
+
+                    # ── Downloads ─────────────────────────────────────────────
                     st.header("💾 Downloads")
-                    
-                    # Check if log file exists (for SMI_FILE input)
+
                     log_file = out_dir / "processing.log"
-                    has_log = log_file.exists()
-                    
-                    if has_log:
-                        # Show log file download first for SMI_FILE input
+                    if log_file.exists():
                         st.subheader("📋 Processing Log")
                         st.download_button(
                             "📄 Download Processing Log (.log)",
@@ -432,12 +499,11 @@ if run_btn:
                             help="Tab-separated file with: Name | pH-adjusted SMILES | Charge | pKa | Source | Zwitterion"
                         )
                         st.markdown("---")
-                    
+
                     st.subheader("📦 Structure Files")
                     col1, col2 = st.columns(2)
-                    
+
                     with col1:
-                        # ZIP everything (including 2D PNG images if available)
                         zip_all = tmp / "all_outputs.zip"
                         zip_all_outputs(str(out_dir), str(zip_all))
                         st.download_button(
@@ -448,18 +514,15 @@ if run_btn:
                             use_container_width=True,
                             help="Includes all structure files, logs, summaries, and 2D images"
                         )
-                    
+
                     with col2:
-                        # ZIP only user-selected formats (PDB and/or MOL2, excluding SDF)
                         zip_structures = tmp / "selected_structures.zip"
                         zip_minimized_structures(str(out_dir), str(zip_structures), output_formats)
-                        
-                        # Create descriptive button text based on selected formats
-                        if len(output_formats) == 1:
-                            btn_text = f"🧬 Download {output_formats[0]} files (ZIP)"
-                        else:
-                            btn_text = f"🧬 Download {' + '.join(output_formats)} files (ZIP)"
-                        
+                        btn_text = (
+                            f"🧬 Download {output_formats[0]} files (ZIP)"
+                            if len(output_formats) == 1
+                            else f"🧬 Download {' + '.join(output_formats)} files (ZIP)"
+                        )
                         st.download_button(
                             btn_text,
                             data=zip_structures.read_bytes(),
@@ -474,7 +537,10 @@ if run_btn:
             st.exception(e)
 
 
-# Sidebar info
+# ─────────────────────────────────────────────────────────────────────────────
+# Sidebar – about / citation / example
+# ─────────────────────────────────────────────────────────────────────────────
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ℹ️ About")
 st.sidebar.info("""
@@ -482,7 +548,7 @@ st.sidebar.info("""
 - **IUPAC pKa database** for high-confidence matches
 - **pKaPredict** for ML-based pKa prediction
 - **Dimorphite-DL** for pH-dependent protonation
-- **RDKit** for 3D structure generation
+- **RDKit** for PDB→SMILES conversion & 3D structure generation
 - **MMFF/UFF** for energy minimization
 
 **Charge Modes:**
@@ -500,7 +566,6 @@ If you use this tool, please cite:
 We thank **Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski**
 for developing **pKaPredict** and the study *"Machine Learning Meets pKa"*,
 which inspired **pKaNET-Cloud**.
-
 """)
 
 st.sidebar.markdown("### 💡 Example")
@@ -517,7 +582,6 @@ O=S(NC1=NC(C2=CN(C(CC#N)C3CCCC3)N=C2)
 Use **FORCE_ZWITTERION** mode for zwitterionic forms!
 """)
 
-# Footer
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; font-size: 0.9rem;'>
