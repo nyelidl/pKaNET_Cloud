@@ -272,7 +272,7 @@ use_iupac_pka = True
 
 xtb_available = _xtb_available()
 
-_pka_options = ["pKaPredict (ML)", "xTB GFN2/ALPB"]
+_pka_options = ["pKaPredict (ML)", "xTB GFN2/ALPB ⚛️"]
 _pka_help    = (
     "**pKaPredict (ML):** IUPAC database → ML model fallback\n\n"
     "**xTB GFN2/ALPB ⚛️:** IUPAC database → quantum-chemical isodesmic "
@@ -291,7 +291,7 @@ pka_method = st.sidebar.radio(
     help=_pka_help,
 )
 
-use_xtb_pka = (pka_method == "xTB GFN2/ALPB") and xtb_available
+use_xtb_pka = (pka_method == "xTB GFN2/ALPB ⚛️") and xtb_available
 
 # Strategy caption
 if use_xtb_pka:
