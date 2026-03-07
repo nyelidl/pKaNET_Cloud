@@ -267,38 +267,52 @@ if charge_mode == "FORCE_ZWITTERION":
 # ── pKa Prediction options ─────────────────────────────────────────────────
 st.sidebar.header("🔬 pKa Prediction")
 
-use_iupac_pka = st.sidebar.checkbox(
-    "Use IUPAC pKa database (when available)", value=True,
-    help=(
-        "Try to match molecule against IUPAC high-confidence pKa dataset first, "
-        "then fall back to pKaPredict ML model (or xTB if enabled)."
-    ))
+# IUPAC is always attempted first — both methods share this behaviour
+use_iupac_pka = True
+
+# Always show the IUPAC-first note
+st.sidebar.markdown(
+    "🗄️ **IUPAC pKa database** is always checked first.  \n"
+    "The toggle below selects the **fallback method** used when no IUPAC match is found.")
 
 xtb_available = _xtb_available()
-use_xtb_pka   = st.sidebar.checkbox(
-    "Use xTB pKa (GFN2 / ALPB water) ⚛️",
+
+# Toggle label changes to reflect xTB availability
+_toggle_label = (
+    "Fallback: pKaPredict ML  ·  xTB GFN2/ALPB ⚛️"
+    if xtb_available
+    else "Fallback: pKaPredict ML  ·  xTB ⚠️ (not installed)"
+)
+
+# st.toggle: False = pKaPredict ML, True = xTB
+_xtb_toggle = st.sidebar.toggle(
+    _toggle_label,
     value=False,
     disabled=not xtb_available,
     help=(
-        "Run GFN2-xTB isodesmic proton-transfer calculation for amine / "
-        "carboxylic acid / phenol groups. Accuracy ±1–2 pKa units. "
-        "Requires xTB to be installed."
+        "**OFF → pKaPredict ML**\n"
+        "IUPAC database checked first; if no match, the ML model predicts pKa.\n\n"
+        "**ON → xTB GFN2/ALPB(water)**\n"
+        "IUPAC database checked first; if matched, IUPAC pKa is shown alongside xTB. "
+        "If no IUPAC match, xTB isodesmic pKa is the sole source (ML is skipped). "
+        "Supports amine / carboxylic acid / phenol groups. Accuracy ±1–2 pKa units."
         if xtb_available
-        else "⚠️ xTB binary not found in PATH — install xTB to enable this option."
-    ))
+        else "**xTB is not available** — install xTB to enable quantum-chemical pKa."
+    ),
+)
 
-# Show active pKa strategy summary
-if use_iupac_pka and not use_xtb_pka:
-    st.sidebar.caption("Strategy: IUPAC (if matched) → pKaPredict ML")
-elif use_iupac_pka and use_xtb_pka:
-    st.sidebar.caption("Strategy: IUPAC (if matched) + xTB · if no IUPAC match → xTB only")
-elif not use_iupac_pka and use_xtb_pka:
-    st.sidebar.caption("Strategy: xTB only (ML skipped)")
+use_xtb_pka = _xtb_toggle and xtb_available
+
+# Active strategy caption
+if use_xtb_pka:
+    st.sidebar.caption(
+        "⚛️ Active: IUPAC → xTB GFN2/ALPB  |  no IUPAC match → xTB only (ML skipped)")
 else:
-    st.sidebar.caption("Strategy: pKaPredict ML only")
+    st.sidebar.caption(
+        "🤖 Active: IUPAC → pKaPredict ML  |  no IUPAC match → ML only")
 
 if not xtb_available:
-    st.sidebar.caption("⚠️ xTB not found in PATH — xTB pKa disabled.")
+    st.sidebar.caption("⚠️ xTB binary not found in PATH — toggle disabled.")
 
 st.sidebar.header("📄 Output Format")
 output_formats = st.sidebar.multiselect(
@@ -773,18 +787,16 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### ℹ️ About")
 st.sidebar.info("""
 **pKaNET Cloud** uses:
-- **IUPAC pKa database** for high-confidence matches
-- **pKaPredict** for ML-based pKa prediction
-- **xTB** (GFN2 / ALPB water) for quantum-chemical pKa *(optional)*
+- **IUPAC pKa database** — always checked first
+- **pKaPredict (ML)** — fallback when no IUPAC match *(toggle OFF)*
+- **xTB GFN2/ALPB(water)** — quantum-chemical fallback *(toggle ON)*
 - **Dimorphite-DL** for pH-dependent protonation
-- **RDKit** for PDB→SMILES conversion & 3D structure generation
-- **MMFF/UFF** for energy minimization
+- **RDKit** for 3D structure generation & MMFF/UFF minimization
 
-**pKa strategy:**
-- IUPAC ✅ / xTB ❌ → IUPAC if matched, else ML
-- IUPAC ✅ / xTB ✅ → IUPAC if matched + xTB; no match → xTB only
-- IUPAC ❌ / xTB ✅ → xTB only
-- IUPAC ❌ / xTB ❌ → ML only
+**pKa strategy (IUPAC always first):**
+- Toggle OFF → IUPAC if matched, else **pKaPredict ML**
+- Toggle ON  → IUPAC if matched + **xTB** alongside;
+  no IUPAC match → **xTB only** (ML skipped)
 
 **Charge Modes:**
 - **AUTO**: Dimorphite-DL dominant microspecies
