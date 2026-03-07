@@ -368,9 +368,9 @@ div[data-testid="stRadio"] > div > label > div > div {
 """, unsafe_allow_html=True)
 
 _pka_options = (
-    ["🤖 pKaPredict ML", "⚛️ xTB GFN2/ALPB"]
+    ["pKaPredict ML", "xTB GFN2"]
     if xtb_available
-    else ["🤖 pKaPredict ML", "⚛️ xTB (unavailable)"]
+    else ["pKaPredict ML", "xTB GFN2 (unavailable)"]
 )
 
 pka_method = st.sidebar.radio(
