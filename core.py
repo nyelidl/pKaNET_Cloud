@@ -275,14 +275,19 @@ def ph_adjust_smiles_dimorphite(smiles_str: str, ph: float, mode: str = "AUTO") 
         smiles_str: Input SMILES
         ph: Target pH
         mode: Charge selection mode
-            - AUTO: return first variant (Dimorphite default)
+            - AUTO: request only 1 variant (dominant microspecies) — matches Colab behaviour
             - FORCE_ZWITTERION: return a strict zwitterion if present among variants; else fallback to most neutral
             - NORMAL: choose most neutral (smallest |net charge|)
     
     Returns:
         (selected_smiles, net_charge, charge_profile_dict)
     """
-    prot_list = protonate_smiles(smiles_str, ph_min=ph, ph_max=ph, max_variants=4)
+    # FIX: AUTO only needs the dominant microspecies — request max_variants=1
+    # to match Colab behaviour. FORCE_ZWITTERION / NORMAL need multiple
+    # candidates to choose from, so they still request 4 variants.
+    n_variants = 1 if mode == "AUTO" else 4
+    prot_list = protonate_smiles(smiles_str, ph_min=ph, ph_max=ph, max_variants=n_variants)
+
     if not prot_list:
         raise ValueError("Dimorphite-DL returned no protonation state.")
 
@@ -311,7 +316,7 @@ def ph_adjust_smiles_dimorphite(smiles_str: str, ph: float, mode: str = "AUTO") 
         smi, prof = min(candidates, key=lambda x: abs(x[1]["net_charge"]))
         return smi, prof["net_charge"], prof
 
-    # AUTO - return first variant
+    # AUTO - return first (and only) variant
     smi, prof = candidates[0]
     return smi, prof["net_charge"], prof
 
