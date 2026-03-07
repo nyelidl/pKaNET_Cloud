@@ -2,6 +2,7 @@ import streamlit as st
 import tempfile
 import subprocess
 import shutil
+import re
 from pathlib import Path
 from core import run_job, zip_all_outputs, zip_minimized_structures
 import streamlit.components.v1 as components
@@ -24,7 +25,6 @@ except (ImportError, OSError) as e:
 
 st.set_page_config(page_title="pKaNET Cloud", layout="wide", page_icon="🧪")
 
-# Custom CSS for better styling
 st.markdown("""
     <style>
     .main-header {
@@ -72,59 +72,198 @@ st.markdown(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
+# xTB pKa helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+HARTREE_TO_KCAL = 627.51
+RT_LN10         = 1.36  # kcal/mol at 298 K
+
+XTB_REFERENCES = {
+    "amine": {
+        "HA_smi":    "CC[NH3+]", "A_smi":  "CCN",
+        "chrg_HA":   "+1",        "chrg_A": "0",
+        "pKa_ref":   10.7,
+        "label":     "Amine (ref: ethylamine, pKa 10.7)",
+        "rxn":       "[NX3;H1,H2;!$(NC=O):1]>>[NH3+:1]",
+        "direction": "protonate",
+    },
+    "acid": {
+        "HA_smi":    "CC(=O)O",  "A_smi":  "CC(=O)[O-]",
+        "chrg_HA":   "0",         "chrg_A": "-1",
+        "pKa_ref":   4.75,
+        "label":     "Carboxylic acid (ref: acetic acid, pKa 4.75)",
+        "rxn":       "[CX3](=O)[OX2H1:1]>>[CX3](=O)[OX1-:1]",
+        "direction": "deprotonate",
+    },
+    "phenol": {
+        "HA_smi":    "Oc1ccccc1", "A_smi": "[O-]c1ccccc1",
+        "chrg_HA":   "0",          "chrg_A": "-1",
+        "pKa_ref":   9.99,
+        "label":     "Phenol (ref: phenol, pKa 9.99)",
+        "rxn":       "[OX2H][c:1]>>[OX1-][c:1]",
+        "direction": "deprotonate",
+    },
+}
+
+def _xtb_available():
+    """Check if xtb binary is on PATH."""
+    return shutil.which("xtb") is not None
+
+def _write_xyz(mol, file_name):
+    n = mol.GetNumAtoms()
+    symbols = [a.GetSymbol() for a in mol.GetAtoms()]
+    conf = mol.GetConformers()[0]
+    with open(file_name, "w") as f:
+        f.write(f"{n}\ntitle\n")
+        for i, sym in enumerate(symbols):
+            p = conf.GetAtomPosition(i)
+            f.write(f"{sym} {p.x:.6f} {p.y:.6f} {p.z:.6f}\n")
+
+def _get_best_conf(mol, n_confs=20):
+    new_mol = Chem.Mol(mol)
+    AllChem.EmbedMultipleConfs(
+        mol, numConfs=n_confs,
+        useExpTorsionAnglePrefs=True, useBasicKnowledge=True)
+    energies = AllChem.MMFFOptimizeMoleculeConfs(mol, maxIters=2000)
+    min_idx = min(range(len(energies)), key=lambda i: energies[i][1])
+    new_mol.AddConformer(mol.GetConformer(min_idx))
+    return new_mol
+
+def _run_xtb_calc(mol, flags, xyz_name):
+    mol = Chem.AddHs(mol)
+    mol = _get_best_conf(mol)
+    _write_xyz(mol, xyz_name)
+    result = subprocess.run(
+        ["bash", "-lc", f"xtb {xyz_name} {flags}"],
+        capture_output=True, text=True)
+    return result.stdout + result.stderr
+
+def _get_energy(output):
+    m = re.search(r"TOTAL ENERGY\s+([-\d.]+)\s+Eh", output)
+    if not m:
+        raise RuntimeError(f"Cannot parse xTB energy.\n{output[-800:]}")
+    return float(m.group(1))
+
+def _run_rxn(mol, smarts):
+    rxn = AllChem.ReactionFromSmarts(smarts)
+    ps  = rxn.RunReactants((mol,))
+    if not ps:
+        raise ValueError(f"Reaction produced no products: {smarts}")
+    prod = ps[0][0]
+    Chem.SanitizeMol(prod)
+    return prod
+
+def _detect_ionizable_groups(mol):
+    patterns = {
+        "amine":  "[NX3;H1,H2;!$(NC=O)]",
+        "acid":   "[CX3](=O)[OX2H1]",
+        "phenol": "[OX2H][c]",
+    }
+    found = [g for g, p in patterns.items()
+             if mol.HasSubstructMatch(Chem.MolFromSmarts(p))]
+    return found if found else ["unknown"]
+
+def run_xtb_pka(smiles_str: str, tmp_dir: Path) -> list[dict]:
+    """
+    Run xTB isodesmic pKa prediction.
+    Returns list of dicts: {group, label, pKa, error}
+    """
+    mol = Chem.MolFromSmiles(smiles_str.strip())
+    if mol is None:
+        return [{"group": "error", "label": "Parse error", "pKa": None,
+                 "error": "Cannot parse SMILES"}]
+
+    groups  = _detect_ionizable_groups(mol)
+    results = []
+
+    for group in groups:
+        if group == "unknown":
+            results.append({
+                "group":  "unknown",
+                "label":  "No ionizable group detected",
+                "pKa":    None,
+                "error":  "No amine / carboxylic acid / phenol found",
+            })
+            continue
+
+        ref = XTB_REFERENCES[group]
+        try:
+            E_HAref = _get_energy(_run_xtb_calc(
+                Chem.MolFromSmiles(ref["HA_smi"]),
+                f"--opt --alpb water --chrg {ref['chrg_HA']}",
+                str(tmp_dir / "HAref.xyz")))
+            E_Aref = _get_energy(_run_xtb_calc(
+                Chem.MolFromSmiles(ref["A_smi"]),
+                f"--opt --alpb water --chrg {ref['chrg_A']}",
+                str(tmp_dir / "Aref.xyz")))
+
+            if ref["direction"] == "protonate":
+                HA_guest, A_guest = _run_rxn(mol, ref["rxn"]), mol
+                chrg_HA, chrg_A   = "+1", "0"
+            else:
+                HA_guest, A_guest = mol, _run_rxn(mol, ref["rxn"])
+                chrg_HA, chrg_A   = "0", "-1"
+
+            E_HA = _get_energy(_run_xtb_calc(
+                HA_guest,
+                f"--opt --alpb water --chrg {chrg_HA}",
+                str(tmp_dir / "HA_guest.xyz")))
+            E_A = _get_energy(_run_xtb_calc(
+                A_guest,
+                f"--opt --alpb water --chrg {chrg_A}",
+                str(tmp_dir / "A_guest.xyz")))
+
+            dE_kcal = ((E_HAref + E_A) - (E_Aref + E_HA)) * HARTREE_TO_KCAL
+            dpKa    = dE_kcal / RT_LN10
+            pKa_xtb = ref["pKa_ref"] + dpKa
+
+            results.append({
+                "group":    group,
+                "label":    ref["label"],
+                "pKa":      pKa_xtb,
+                "dE_kcal":  dE_kcal,
+                "dpKa":     dpKa,
+                "error":    None,
+            })
+
+        except Exception as e:
+            results.append({
+                "group": group,
+                "label": ref["label"],
+                "pKa":   None,
+                "error": str(e),
+            })
+
+    return results
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PDB → canonical SMILES conversion
 # ─────────────────────────────────────────────────────────────────────────────
 
 def pdb_to_canonical_smiles(pdb_bytes: bytes) -> tuple[str | None, str | None]:
-    """
-    Convert PDB file bytes to a canonical SMILES string using Open Babel:
-        obabel input.pdb -O output.smi --canonical
-
-    Returns
-    -------
-    (smiles, error_message)
-        smiles is None when conversion fails; error_message is None on success.
-    """
     if shutil.which("obabel") is None:
         return None, (
             "Open Babel (obabel) is not installed or not found in PATH. "
             "Please install it: conda install -c conda-forge openbabel"
         )
-
     try:
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             pdb_file = tmp / "input.pdb"
             smi_file = tmp / "output.smi"
-
             pdb_file.write_bytes(pdb_bytes)
-
             result = subprocess.run(
                 ["obabel", str(pdb_file), "-O", str(smi_file), "--canonical"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-
+                capture_output=True, text=True, timeout=30)
             if not smi_file.exists() or smi_file.stat().st_size == 0:
-                stderr = result.stderr.strip()
-                return None, (
-                    f"obabel produced no output. "
-                    f"stderr: {stderr or '(none)'}"
-                )
-
-            # obabel .smi output format: "<SMILES>\t<name>" per line
+                return None, f"obabel produced no output. stderr: {result.stderr.strip() or '(none)'}"
             raw = smi_file.read_text(encoding="utf-8", errors="replace").strip()
             if not raw:
                 return None, "obabel produced an empty SMILES file."
-
-            # Take first non-empty line, strip optional tab-separated name
             smiles = raw.splitlines()[0].split()[0].strip()
             if not smiles:
                 return None, "Could not parse SMILES from obabel output."
-
             return smiles, None
-
     except subprocess.TimeoutExpired:
         return None, "obabel conversion timed out (>30 s)."
     except Exception as exc:
@@ -135,16 +274,14 @@ def pdb_to_canonical_smiles(pdb_bytes: bytes) -> tuple[str | None, str | None]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.sidebar.header("⚙️ Input / Options")
-input_type = st.sidebar.selectbox("Input type", ["SMILES", "SMI_FILE", "FILE"])
-target_pH = st.sidebar.slider("Target pH", 2.0, 12.0, 7.4, 0.1)
-output_name = st.sidebar.text_input("Output name (for single SMILES/FILE)", value="ligand")
+input_type   = st.sidebar.selectbox("Input type", ["SMILES", "SMI_FILE", "FILE"])
+target_pH    = st.sidebar.slider("Target pH", 2.0, 12.0, 7.4, 0.1)
+output_name  = st.sidebar.text_input("Output name (for single SMILES/FILE)", value="ligand")
 
 st.sidebar.header("🧬 Stereochemistry")
 enumerate_stereoisomers = st.sidebar.checkbox(
-    "Enumerate R/S stereoisomers",
-    value=True,
-    help="Automatically generate both R and S stereoisomers for undefined chiral centers. If unchecked, keeps original stereochemistry as-is."
-)
+    "Enumerate R/S stereoisomers", value=True,
+    help="Automatically generate both R and S stereoisomers for undefined chiral centers.")
 
 st.sidebar.header("⚡ Charge Mode")
 charge_mode = st.sidebar.selectbox(
@@ -155,28 +292,45 @@ charge_mode = st.sidebar.selectbox(
     - AUTO: Use Dimorphite-DL dominant microspecies (first variant)
     - FORCE_ZWITTERION: Return strict zwitterion if present; else most neutral
     - NORMAL: Choose most neutral state (smallest |net charge|)
-    
-    Zwitterion (strict): has both + and − atoms AND net charge = 0
-    """
-)
+    """)
 
 if charge_mode == "FORCE_ZWITTERION":
     st.sidebar.info("🧷 **Zwitterion mode**: Will prioritize structures with both positive and negative atoms and net charge = 0")
 
+# ── pKa Prediction options ────────────────────────────────────────────────────
 st.sidebar.header("🔬 pKa Prediction")
+
 use_iupac_pka = st.sidebar.checkbox(
-    "Use IUPAC pKa database (when available)",
-    value=True,
-    help="Try to match molecule against IUPAC high-confidence pKa dataset first, then fall back to pKaPredict ML model"
+    "Use IUPAC pKa database (when available)", value=True,
+    help="Try to match molecule against IUPAC high-confidence pKa dataset first, "
+         "then fall back to pKaPredict ML model")
+
+xtb_available = _xtb_available()
+use_xtb_pka = st.sidebar.checkbox(
+    "Use xTB pKa (GFN2 / ALPB water) ⚛️",
+    value=False,
+    disabled=not xtb_available,
+    help=(
+        "Run GFN2-xTB isodesmic proton-transfer calculation for amine / "
+        "carboxylic acid / phenol groups. Accuracy ±1–2 pKa units. "
+        "Requires xTB to be installed."
+        if xtb_available
+        else "⚠️ xTB binary not found in PATH — install xTB to enable this option."
+    ),
 )
+if use_xtb_pka:
+    st.sidebar.info(
+        "⚛️ **xTB pKa**: GFN2-xTB / ALPB(water) isodesmic proton transfer.\n\n"
+        "Detects: amine · carboxylic acid · phenol\n\n"
+        "Accuracy: ±1–2 pKa units"
+    )
+if not xtb_available:
+    st.sidebar.caption("⚠️ xTB not found in PATH — xTB pKa disabled.")
 
 st.sidebar.header("📄 Output Format")
 output_formats = st.sidebar.multiselect(
-    "Select output formats",
-    ["PDB", "MOL2"],
-    default=["PDB"],
-    help="SDF is always generated for 3D visualization"
-)
+    "Select output formats", ["PDB", "MOL2"], default=["PDB"],
+    help="SDF is always generated for 3D visualization")
 if not output_formats:
     st.sidebar.warning("⚠️ Please select at least one output format")
 
@@ -186,9 +340,8 @@ if DRAW_AVAILABLE:
 else:
     show_2d = False
     st.sidebar.info("ℹ️ 2D visualization not available on this server")
-show_3d = st.sidebar.checkbox("Show 3D structure", value=True)
-
-viewer_width = st.sidebar.slider("3D Viewer Width", 300, 800, 300, 50)
+show_3d      = st.sidebar.checkbox("Show 3D structure", value=True)
+viewer_width  = st.sidebar.slider("3D Viewer Width",  300, 800, 300, 50)
 viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 300, 50)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -196,7 +349,7 @@ viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 300, 50)
 # ─────────────────────────────────────────────────────────────────────────────
 
 smiles_text = None
-uploaded = None
+uploaded    = None
 
 if input_type == "SMILES":
     smiles_text = st.text_area(
@@ -204,34 +357,22 @@ if input_type == "SMILES":
         height=120,
         placeholder="Paste a SMILES (RDKit-canonical SMILES) here:",
     )
-
 elif input_type == "SMI_FILE":
-    uploaded = st.file_uploader(
-        "Upload .smi (SMILES [name] per line)",
-        type=["smi", "txt"],
-    )
+    uploaded = st.file_uploader("Upload .smi (SMILES [name] per line)", type=["smi", "txt"])
     st.info("📝 Format: `SMILES [optional_name]` per line")
-
-else:  # FILE (PDB)
-    uploaded = st.file_uploader(
-        "Upload ligand PDB file",
-        type=["pdb"],
-    )
-    st.info(
-        "📝 The PDB file will be **automatically converted to canonical SMILES** "
-        "using RDKit before pKa prediction and 3D structure generation."
-    )
+else:
+    uploaded = st.file_uploader("Upload ligand PDB file", type=["pdb"])
+    st.info("📝 The PDB file will be automatically converted to canonical SMILES using RDKit.")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Live PDB → SMILES preview (shown as soon as a file is uploaded)
+# Live PDB → SMILES preview
 # ─────────────────────────────────────────────────────────────────────────────
 
-converted_smiles_from_pdb: str | None = None   # will be set below when applicable
+converted_smiles_from_pdb: str | None = None
 
 if input_type == "FILE" and uploaded is not None:
-    pdb_bytes = uploaded.read()          # read once; cached by Streamlit widget
+    pdb_bytes = uploaded.read()
     converted_smiles_from_pdb, conv_err = pdb_to_canonical_smiles(pdb_bytes)
-
     if conv_err:
         st.error(f"❌ PDB → SMILES conversion failed: {conv_err}")
     else:
@@ -251,7 +392,6 @@ if input_type == "FILE" and uploaded is not None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def draw_molecule_2d(smiles_str, size=(400, 300)):
-    """Generate 2D molecular structure image."""
     if not DRAW_AVAILABLE:
         return None
     try:
@@ -259,15 +399,12 @@ def draw_molecule_2d(smiles_str, size=(400, 300)):
         if mol is None:
             return None
         AllChem.Compute2DCoords(mol)
-        img = Draw.MolToImage(mol, size=size)
-        return img
+        return Draw.MolToImage(mol, size=size)
     except Exception as e:
         st.warning(f"Could not generate 2D structure: {e}")
         return None
 
-
 def create_3dmol_viewer(sdf_content, width=400, height=300):
-    """Create py3Dmol viewer HTML – stick style with radius 0.2."""
     html_template = f"""
     <div id="container" style="width: {width}px; height: {height}px; position: relative;"></div>
     <script src="https://3Dmol.csb.pitt.edu/build/3Dmol-min.js"></script>
@@ -284,8 +421,34 @@ def create_3dmol_viewer(sdf_content, width=400, height=300):
     """
     return html_template
 
+def display_xtb_pka_results(xtb_results: list[dict]):
+    """Render xTB pKa results as a tidy expander."""
+    with st.expander("⚛️ xTB pKa Results (GFN2 / ALPB water)", expanded=True):
+        any_result = False
+        for r in xtb_results:
+            if r["error"]:
+                st.warning(f"**{r['label']}**: ⚠️ {r['error']}")
+                continue
+            any_result = True
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric(
+                    label=f"pKa ({r['group']})",
+                    value=f"{r['pKa']:.1f}",
+                    help=r["label"],
+                )
+            with col2:
+                st.markdown(f"**Group:** {r['label']}")
+                st.markdown(f"**ΔE (isodesmic):** `{r['dE_kcal']:+.3f}` kcal/mol")
+                st.markdown(f"**ΔpKa:** `{r['dpKa']:+.2f}`")
+            st.divider()
+        if not any_result:
+            st.info("No ionizable groups (amine / carboxylic acid / phenol) detected.")
+        st.caption("💡 Method: GFN2-xTB / ALPB(water) isodesmic proton transfer | Accuracy: ±1–2 pKa units")
 
-def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height):
+def display_ligand_result(result, out_dir, show_2d, show_3d,
+                          viewer_width, viewer_height,
+                          xtb_results=None):
     """Display results for a single ligand."""
 
     st.subheader("🔬 Molecular Information")
@@ -308,16 +471,21 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
 
         if result.get('is_zwitterion', False):
             st.markdown("**Zwitterion (strict):** `YES` 🧷")
-            st.caption(f"✓ Has {result.get('n_pos_atoms', 0)} positive and {result.get('n_neg_atoms', 0)} negative atoms, net charge = 0")
+            st.caption(f"✓ Has {result.get('n_pos_atoms', 0)} positive and "
+                       f"{result.get('n_neg_atoms', 0)} negative atoms, net charge = 0")
         else:
-            if result.get('has_pos', False) and result.get('has_neg', False):
-                st.markdown("**Zwitterion (strict):** `NO`")
-                st.caption(f"Has {result.get('n_pos_atoms', 0)} positive and {result.get('n_neg_atoms', 0)} negative atoms, but net charge ≠ 0")
-            else:
-                st.markdown("**Zwitterion (strict):** `NO`")
-
+            pos = result.get('has_pos', False)
+            neg = result.get('has_neg', False)
+            st.markdown("**Zwitterion (strict):** `NO`")
+            if pos and neg:
+                st.caption(f"Has {result.get('n_pos_atoms', 0)} positive and "
+                           f"{result.get('n_neg_atoms', 0)} negative atoms, but net charge ≠ 0")
         if "stereoisomer_id" in result:
             st.markdown(f"**Stereoisomer:** `{result['stereoisomer_id']}`")
+
+    # ── xTB pKa results (shown right below molecular info) ───────────────────
+    if xtb_results is not None:
+        display_xtb_pka_results(xtb_results)
 
     if show_2d or show_3d:
         st.subheader("🎨 Structure Visualization")
@@ -338,8 +506,8 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
                     sdf_path = Path(result["minimized_sdf"])
                     if sdf_path.exists():
                         try:
-                            sdf_content = sdf_path.read_text()
-                            viewer_html = create_3dmol_viewer(sdf_content, width=viewer_width, height=viewer_height)
+                            viewer_html = create_3dmol_viewer(
+                                sdf_path.read_text(), width=viewer_width, height=viewer_height)
                             components.html(viewer_html, height=viewer_height + 20, scrolling=False)
                         except Exception as e:
                             st.warning(f"⚠️ 3D visualization failed: {e}")
@@ -354,8 +522,6 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
                 img = draw_molecule_2d(result["ph_smiles"], size=(600, 400))
                 if img:
                     st.image(img, use_container_width=True)
-                else:
-                    st.warning("Could not generate 2D structure")
 
         elif show_3d:
             st.markdown("**3D Structure**")
@@ -363,8 +529,8 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
                 sdf_path = Path(result["minimized_sdf"])
                 if sdf_path.exists():
                     try:
-                        sdf_content = sdf_path.read_text()
-                        viewer_html = create_3dmol_viewer(sdf_content, width=viewer_width, height=viewer_height)
+                        viewer_html = create_3dmol_viewer(
+                            sdf_path.read_text(), width=viewer_width, height=viewer_height)
                         components.html(viewer_html, height=viewer_height + 20, scrolling=False)
                     except Exception as e:
                         st.warning(f"⚠️ 3D visualization failed: {e}")
@@ -375,23 +541,16 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
 
     with st.expander("📁 Output Files"):
         available_files = []
-        if "minimized_pdb" in result and result["minimized_pdb"]:
-            pdb_path = Path(result["minimized_pdb"])
-            if pdb_path.exists():
-                available_files.append(f"- **PDB:** `{pdb_path.name}`")
-        if "minimized_mol2" in result and result["minimized_mol2"]:
-            mol2_path = Path(result["minimized_mol2"])
-            if mol2_path.exists():
-                available_files.append(f"- **MOL2:** `{mol2_path.name}`")
-        if "minimized_sdf" in result and result["minimized_sdf"]:
-            sdf_path = Path(result["minimized_sdf"])
-            if sdf_path.exists():
-                available_files.append(f"- **SDF:** `{sdf_path.name}` (for visualization)")
+        for key, label in [("minimized_pdb", "PDB"), ("minimized_mol2", "MOL2"),
+                            ("minimized_sdf", "SDF")]:
+            if result.get(key):
+                p = Path(result[key])
+                if p.exists():
+                    available_files.append(f"- **{label}:** `{p.name}`")
         if available_files:
             st.markdown("\n".join(available_files))
         else:
             st.warning("No output files generated")
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Run button
@@ -400,7 +559,6 @@ def display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewe
 run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
 
 if run_btn:
-    # ── Validation ────────────────────────────────────────────────────────────
     if input_type == "SMILES" and not smiles_text:
         st.error("⚠️ Please enter a SMILES string")
     elif input_type == "SMI_FILE" and not uploaded:
@@ -417,67 +575,79 @@ if run_btn:
                 with tempfile.TemporaryDirectory() as tmp:
                     tmp = Path(tmp)
 
-                    # ── Determine effective input for run_job ─────────────────
                     if input_type == "FILE":
-                        # PDB was already converted above; feed as SMILES
                         effective_input_type = "SMILES"
-                        effective_smiles    = converted_smiles_from_pdb
-                        effective_bytes     = None
-                        effective_name      = None
-                        st.info(
-                            f"🔄 Using canonical SMILES derived from PDB: "
-                            f"`{converted_smiles_from_pdb}`"
-                        )
+                        effective_smiles     = converted_smiles_from_pdb
+                        effective_bytes      = None
+                        effective_name       = None
+                        st.info(f"🔄 Using canonical SMILES derived from PDB: `{converted_smiles_from_pdb}`")
                     elif input_type == "SMILES":
                         effective_input_type = "SMILES"
-                        effective_smiles    = smiles_text
-                        effective_bytes     = None
-                        effective_name      = None
-                    else:  # SMI_FILE
+                        effective_smiles     = smiles_text
+                        effective_bytes      = None
+                        effective_name       = None
+                    else:
                         effective_input_type = "SMI_FILE"
-                        effective_smiles    = None
-                        effective_bytes     = uploaded.read()
-                        effective_name      = uploaded.name
+                        effective_smiles     = None
+                        effective_bytes      = uploaded.read()
+                        effective_name       = uploaded.name
 
                     out_dir = tmp / "out"
                     out = run_job(
-                        input_type          = effective_input_type,
-                        smiles_text         = effective_smiles,
-                        uploaded_bytes      = effective_bytes,
-                        uploaded_name       = effective_name,
-                        target_pH           = target_pH,
-                        output_name         = output_name,
-                        out_dir             = str(out_dir),
-                        output_formats      = output_formats,
+                        input_type              = effective_input_type,
+                        smiles_text             = effective_smiles,
+                        uploaded_bytes          = effective_bytes,
+                        uploaded_name           = effective_name,
+                        target_pH               = target_pH,
+                        output_name             = output_name,
+                        out_dir                 = str(out_dir),
+                        output_formats          = output_formats,
                         enumerate_stereoisomers = enumerate_stereoisomers,
-                        charge_mode         = charge_mode,
-                        use_iupac_pka       = use_iupac_pka,
+                        charge_mode             = charge_mode,
+                        use_iupac_pka           = use_iupac_pka,
                     )
+
+                    # ── xTB pKa (run once on original base SMILES) ────────────
+                    xtb_results_map: dict[str, list[dict]] = {}
+                    if use_xtb_pka:
+                        with st.spinner("⚛️ Running xTB pKa calculations..."):
+                            xtb_tmp = tmp / "xtb_work"
+                            xtb_tmp.mkdir(exist_ok=True)
+                            # collect unique base SMILES across results
+                            seen = set()
+                            for r in out["results"]:
+                                base_smi = r.get("base_smiles", "")
+                                if base_smi and base_smi not in seen:
+                                    seen.add(base_smi)
+                                    try:
+                                        xtb_results_map[base_smi] = run_xtb_pka(
+                                            base_smi, xtb_tmp)
+                                    except Exception as e:
+                                        xtb_results_map[base_smi] = [{
+                                            "group": "error", "label": "xTB error",
+                                            "pKa": None, "error": str(e),
+                                        }]
 
                     st.success("✅ Analysis complete!")
 
-                    # ── Warnings ─────────────────────────────────────────────
+                    # ── Warnings ──────────────────────────────────────────────
                     if "format_warnings" in out and out["format_warnings"]:
                         pka_warnings   = [w for w in out["format_warnings"] if "pKa prediction failed" in w]
                         info_warnings  = [w for w in out["format_warnings"] if w.startswith("ℹ️")]
                         other_warnings = [w for w in out["format_warnings"]
                                           if w not in pka_warnings and w not in info_warnings]
-
                         if pka_warnings:
                             with st.expander("⚠️ pKa Prediction Warnings", expanded=True):
-                                for warning in pka_warnings:
-                                    st.warning(warning)
-                                st.info(
-                                    "💡 **Note:** pKa prediction may fail for certain molecular "
-                                    "structures. The pH-adjusted structure and formal charge are "
-                                    "still calculated correctly using Dimorphite-DL."
-                                )
+                                for w in pka_warnings:
+                                    st.warning(w)
+                                st.info("💡 pH-adjusted structure and formal charge are still "
+                                        "calculated correctly using Dimorphite-DL.")
                         if other_warnings:
                             with st.expander("⚠️ Format Warnings", expanded=False):
-                                for warning in other_warnings:
-                                    st.warning(warning)
-                        for warning in info_warnings:
-                            st.info(warning)
+                                for w in other_warnings:
+                                    st.warning(w)
+                        for w in info_warnings:
+                            st.info(w)
 
                     # ── Summary ───────────────────────────────────────────────
                     with st.expander("📊 Summary", expanded=True):
@@ -504,9 +674,19 @@ if run_btn:
                         tabs = st.tabs([r["name"] for r in results])
                         for tab, result in zip(tabs, results):
                             with tab:
-                                display_ligand_result(result, out_dir, show_2d, show_3d, viewer_width, viewer_height)
+                                xtb_res = xtb_results_map.get(
+                                    result.get("base_smiles", "")) if use_xtb_pka else None
+                                display_ligand_result(
+                                    result, out_dir, show_2d, show_3d,
+                                    viewer_width, viewer_height,
+                                    xtb_results=xtb_res)
                     else:
-                        display_ligand_result(results[0], out_dir, show_2d, show_3d, viewer_width, viewer_height)
+                        xtb_res = xtb_results_map.get(
+                            results[0].get("base_smiles", "")) if use_xtb_pka else None
+                        display_ligand_result(
+                            results[0], out_dir, show_2d, show_3d,
+                            viewer_width, viewer_height,
+                            xtb_results=xtb_res)
 
                     # ── Downloads ─────────────────────────────────────────────
                     st.header("💾 Downloads")
@@ -520,13 +700,12 @@ if run_btn:
                             file_name="pkanet_processing.log",
                             mime="text/plain",
                             use_container_width=True,
-                            help="Tab-separated file with: Name | pH-adjusted SMILES | Charge | pKa | Source | Zwitterion"
+                            help="Tab-separated: Name | pH-adjusted SMILES | Charge | pKa | Source | Zwitterion"
                         )
                         st.markdown("---")
 
                     st.subheader("📦 Structure Files")
                     col1, col2 = st.columns(2)
-
                     with col1:
                         zip_all = tmp / "all_outputs.zip"
                         zip_all_outputs(str(out_dir), str(zip_all))
@@ -536,9 +715,7 @@ if run_btn:
                             file_name="pkanet_all_outputs.zip",
                             mime="application/zip",
                             use_container_width=True,
-                            help="Includes all structure files, logs, summaries, and 2D images"
                         )
-
                     with col2:
                         zip_structures = tmp / "selected_structures.zip"
                         zip_minimized_structures(str(out_dir), str(zip_structures), output_formats)
@@ -553,13 +730,11 @@ if run_btn:
                             file_name=f"pkanet_{'_'.join([f.lower() for f in output_formats])}.zip",
                             mime="application/zip",
                             use_container_width=True,
-                            help=f"Only {' and '.join(output_formats)} structure files (SDF excluded)"
                         )
 
         except Exception as e:
             st.error(f"❌ Error: {e}")
             st.exception(e)
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Sidebar – about / citation / example
@@ -571,14 +746,17 @@ st.sidebar.info("""
 **pKaNET Cloud** uses:
 - **IUPAC pKa database** for high-confidence matches
 - **pKaPredict** for ML-based pKa prediction
+- **xTB** (GFN2 / ALPB water) for quantum-chemical pKa *(optional)*
 - **Dimorphite-DL** for pH-dependent protonation
 - **RDKit** for PDB→SMILES conversion & 3D structure generation
 - **MMFF/UFF** for energy minimization
 
+**xTB pKa:** Isodesmic proton transfer, detects amine · acid · phenol. Accuracy ±1–2 pKa units.
+
 **Charge Modes:**
 - **AUTO**: Dimorphite-DL dominant microspecies
-- **FORCE_ZWITTERION**: Prioritize strict zwitterions (has + and − atoms, net charge = 0)
-- **NORMAL**: Most neutral state (smallest |net charge|)
+- **FORCE_ZWITTERION**: Prioritize strict zwitterions
+- **NORMAL**: Most neutral state
 """)
 
 st.sidebar.markdown("### 📚 Citation")
@@ -588,8 +766,7 @@ If you use this tool, please cite:
 - Dimorphite-DL: Ropp PJ et al., J Cheminform (2019)
 
 We thank **Anastasia Floris, Candice Habert, Marcel Baltruschat, and Paul Czodrowski**
-for developing **pKaPredict** and the study *"Machine Learning Meets pKa"*,
-which inspired **pKaNET-Cloud**.
+for developing **pKaPredict** and the study *"Machine Learning Meets pKa"*.
 """)
 
 st.sidebar.markdown("### 💡 Example")
