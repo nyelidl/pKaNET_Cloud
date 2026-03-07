@@ -267,55 +267,38 @@ if charge_mode == "FORCE_ZWITTERION":
 # ── pKa Prediction options ─────────────────────────────────────────────────
 st.sidebar.header("🔬 pKa Prediction")
 
-# IUPAC is always used first — both methods fall back to it
-use_iupac_pka = True
+use_iupac_pka = st.sidebar.checkbox(
+    "Use IUPAC pKa database (when available)", value=True,
+    help=(
+        "Try to match molecule against IUPAC high-confidence pKa dataset first, "
+        "then fall back to pKaPredict ML model (or xTB if enabled)."
+    ))
 
 xtb_available = _xtb_available()
+use_xtb_pka   = st.sidebar.checkbox(
+    "Use xTB pKa (GFN2 / ALPB water) ⚛️",
+    value=False,
+    disabled=not xtb_available,
+    help=(
+        "Run GFN2-xTB isodesmic proton-transfer calculation for amine / "
+        "carboxylic acid / phenol groups. Accuracy ±1–2 pKa units. "
+        "Requires xTB to be installed."
+        if xtb_available
+        else "⚠️ xTB binary not found in PATH — install xTB to enable this option."
+    ))
 
-_pka_options = ["pKaPredict (ML)", "xTB GFN2/ALPB ⚛️"]
-_pka_help    = (
-    "**pKaPredict (ML):** IUPAC database → ML model fallback\n\n"
-    "**xTB GFN2/ALPB ⚛️:** IUPAC database → quantum-chemical isodesmic "
-    "proton transfer (amine / acid / phenol). Accuracy ±1–2 pKa units."
-    if xtb_available
-    else "**pKaPredict (ML):** IUPAC database → ML model fallback\n\n"
-         "**xTB GFN2/ALPB ⚛️:** ⚠️ xTB binary not found in PATH — "
-         "install xTB to enable."
-)
-
-pka_method = st.sidebar.radio(
-    "Fallback method (if no IUPAC match)",
-    options=_pka_options,
-    index=0,
-    disabled=False,
-    help=_pka_help,
-)
-
-use_xtb_pka = (pka_method == "xTB GFN2/ALPB ⚛️") and xtb_available
-
-# Strategy caption
-if use_xtb_pka:
-    st.sidebar.caption("🔬 IUPAC (if matched) → xTB GFN2/ALPB · no match → xTB only")
+# Show active pKa strategy summary
+if use_iupac_pka and not use_xtb_pka:
+    st.sidebar.caption("Strategy: IUPAC (if matched) → pKaPredict ML")
+elif use_iupac_pka and use_xtb_pka:
+    st.sidebar.caption("Strategy: IUPAC (if matched) + xTB · if no IUPAC match → xTB only")
+elif not use_iupac_pka and use_xtb_pka:
+    st.sidebar.caption("Strategy: xTB only (ML skipped)")
 else:
-    st.sidebar.caption("🔬 IUPAC (if matched) → pKaPredict ML · no match → ML only")
+    st.sidebar.caption("Strategy: pKaPredict ML only")
 
-if not xtb_available and pka_method == "xTB GFN2/ALPB ⚛️":
-    st.sidebar.warning("⚠️ xTB not found in PATH — falling back to pKaPredict ML.")
-```
-
----
-
-That's the only change needed. `core.py` and the rest of `app.py` stay identical — `use_iupac_pka` is still passed in (hardcoded `True` now), and `use_xtb_pka` is still derived the same way.
-
-The new sidebar looks like:
-```
-🔬 pKa Prediction
-─────────────────────────────────
-Fallback method (if no IUPAC match)
-  ● pKaPredict (ML)
-  ○ xTB GFN2/ALPB ⚛️
-
-🔬 IUPAC (if matched) → pKaPredict ML · no match → ML only
+if not xtb_available:
+    st.sidebar.caption("⚠️ xTB not found in PATH — xTB pKa disabled.")
 
 st.sidebar.header("📄 Output Format")
 output_formats = st.sidebar.multiselect(
