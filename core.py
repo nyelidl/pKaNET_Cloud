@@ -191,7 +191,33 @@ def predict_pka_pkanet(smiles: str) -> float:
 def ph_adjust_smiles_dimorphite(
     smiles_str: str, ph: float, mode: str = "AUTO"
 ) -> Tuple[str, int, Dict[str, Any]]:
-    prot_list = protonate_smiles(smiles_str, ph_min=ph, ph_max=ph, max_variants=4)
+    """Protonate smiles_str at the given pH using Dimorphite-DL.
+
+    Charge mode semantics
+    ─────────────────────
+    AUTO            Call Dimorphite-DL with max_variants=1 so it returns only
+                    the dominant microspecies at that pH. This matches the
+                    Colab cell behaviour and gives the chemically correct
+                    protonation state (e.g. sulfonamide is -1 at pH 7.4).
+
+    FORCE_ZWITTERION Enumerate up to 4 variants, then pick the strict
+                    zwitterion (has_pos AND has_neg AND net=0). Falls back
+                    to most-neutral if none found.
+
+    NORMAL          Enumerate up to 4 variants, then pick the variant with
+                    the smallest |net charge|. ⚠️ This deliberately forces
+                    the most neutral form even when the dominant microspecies
+                    at the target pH carries a charge (e.g. deprotonated
+                    sulfonamide). Use AUTO unless you specifically need this.
+    """
+
+    if mode == "AUTO":
+        # max_variants=1 → Dimorphite-DL returns its single best (dominant)
+        # microspecies — same as the Colab cell
+        prot_list = protonate_smiles(smiles_str, ph_min=ph, ph_max=ph, max_variants=1)
+    else:
+        prot_list = protonate_smiles(smiles_str, ph_min=ph, ph_max=ph, max_variants=4)
+
     if not prot_list:
         raise ValueError("Dimorphite-DL returned no protonation state.")
 
@@ -210,14 +236,16 @@ def ph_adjust_smiles_dimorphite(
         for smi, prof in candidates:
             if prof["is_zwitterion_strict"]:
                 return smi, prof["net_charge"], prof
+        # No strict zwitterion found — fall back to most neutral
         smi, prof = min(candidates, key=lambda x: abs(x[1]["net_charge"]))
         return smi, prof["net_charge"], prof
 
     if mode == "NORMAL":
+        # Deliberately picks most neutral — may not match dominant microspecies
         smi, prof = min(candidates, key=lambda x: abs(x[1]["net_charge"]))
         return smi, prof["net_charge"], prof
 
-    # AUTO — first variant
+    # AUTO — single dominant microspecies from Dimorphite-DL
     smi, prof = candidates[0]
     return smi, prof["net_charge"], prof
 
