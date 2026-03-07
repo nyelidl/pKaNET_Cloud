@@ -335,9 +335,16 @@ charge_mode = st.sidebar.selectbox(
     "Protonation state selection",
     ["AUTO", "FORCE_ZWITTERION", "NORMAL"], index=0,
     help=(
-        "AUTO: Use Dimorphite-DL dominant microspecies (first variant)\n"
-        "FORCE_ZWITTERION: Return strict zwitterion if present; else most neutral\n"
-        "NORMAL: Choose most neutral state (smallest |net charge|)"
+        "AUTO (recommended): Dimorphite-DL returns its single dominant "
+        "microspecies at the target pH. Matches Colab cell behaviour. "
+        "Correctly gives charge -1 for deprotonated sulfonamides, acids, etc.\n\n"
+        "FORCE_ZWITTERION: From up to 4 Dimorphite-DL variants, pick the "
+        "strict zwitterion (both + and − atoms, net = 0). Falls back to "
+        "most neutral if none found.\n\n"
+        "NORMAL: ⚠️ Picks the most neutral variant (smallest |charge|) "
+        "regardless of which form dominates at the target pH. May return "
+        "charge 0 even when the correct protonation state is charged "
+        "(e.g. sulfonamide at pH 7.4 should be -1, not 0)."
     ))
 if charge_mode == "FORCE_ZWITTERION":
     st.sidebar.info(
@@ -356,78 +363,26 @@ st.sidebar.markdown(
 
 xtb_available = _xtb_available()
 
-# Inject CSS to make the radio look like a segmented button group
-st.sidebar.markdown("""
-<style>
-div[data-testid="stRadio"] > label {
-    display: none;
-}
-div[data-testid="stRadio"] > div {
-    display: flex;
-    flex-direction: row;
-    gap: 0px;
-}
-div[data-testid="stRadio"] > div > label {
-    flex: 1;
-    text-align: center;
-    padding: 6px 4px;
-    border: 1.5px solid #d0d0d0;
-    border-radius: 0px;
-    cursor: pointer;
-    font-size: 0.82rem;
-    font-weight: 500;
-    background: #f8f8f8;
-    color: #444;
-    transition: background 0.15s;
-    margin: 0 !important;
-}
-div[data-testid="stRadio"] > div > label:first-child {
-    border-radius: 8px 0px 0px 8px;
-    border-right: none;
-}
-div[data-testid="stRadio"] > div > label:last-child {
-    border-radius: 0px 8px 8px 0px;
-}
-div[data-testid="stRadio"] > div > label:has(input:checked) {
-    background: #1f77b4;
-    color: white;
-    border-color: #1f77b4;
-}
-div[data-testid="stRadio"] > div > label > div {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-}
-div[data-testid="stRadio"] > div > label > div > div {
-    display: none;
-}
-</style>
-""", unsafe_allow_html=True)
-
 _pka_options = (
     ["pKaPredict ML", "xTB GFN2"]
     if xtb_available
     else ["pKaPredict ML", "xTB GFN2 (unavailable)"]
 )
 
-pka_method = st.sidebar.radio(
-    "pKa fallback method",
+pka_method = st.sidebar.segmented_control(
+    "Fallback method (if no IUPAC match)",
     options=_pka_options,
-    index=0,
-    horizontal=True,
-    disabled=False,
-    label_visibility="collapsed",
+    default="pKaPredict ML",
     help=(
-        "**🤖 pKaPredict ML:** IUPAC database first → ML model if no match\n\n"
-        "**⚛️ xTB GFN2/ALPB:** IUPAC database first → xTB isodesmic pKa if no match "
+        "**pKaPredict ML:** IUPAC database first → ML model if no match\n\n"
+        "**xTB GFN2:** IUPAC database first → xTB GFN2/ALPB(water) isodesmic pKa if no match "
         "(ML is skipped). Supports amine / carboxylic acid / phenol. Accuracy ±1–2 pKa units."
         if xtb_available
-        else "**⚛️ xTB** is not installed — install xTB to enable."
+        else "**xTB GFN2** is not installed — install xTB to enable."
     ),
 )
 
-use_xtb_pka = ("xTB" in pka_method) and xtb_available
+use_xtb_pka = (pka_method == "xTB GFN2") and xtb_available
 
 # Active strategy caption
 if use_xtb_pka:
@@ -934,9 +889,9 @@ st.sidebar.info("""
   no IUPAC match → **xTB only** (ML skipped)
 
 **Charge Modes:**
-- **AUTO**: Dimorphite-DL dominant microspecies
-- **FORCE_ZWITTERION**: Prioritize strict zwitterions
-- **NORMAL**: Most neutral state
+- **AUTO** ✅ (recommended): Dimorphite-DL dominant microspecies — matches Colab cell
+- **FORCE_ZWITTERION**: Prioritize strict zwitterions (net = 0, has +/− atoms)
+- **NORMAL**: ⚠️ Forces most neutral state — may be wrong for acids/sulfonamides
 """)
 
 st.sidebar.markdown("### 📚 Citation")
