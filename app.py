@@ -80,6 +80,18 @@ XTB_REFERENCES = {
         "rxn":       "[OX2H][c:1]>>[OX1-][c:1]",
         "direction": "deprotonate",
     },
+    "sulfonamide": {
+        # Sulfonamide NH is ACIDIC (deprotonates), not basic.
+        # Reference: methanesulfonamide pKa ~10.0 (aliphatic)
+        # Aryl sulfonamides (e.g. sulfamethoxazole) are ~5–6 — the
+        # isodesmic correction handles the difference automatically.
+        "HA_smi":    "CS(=O)(=O)N",   "A_smi":  "CS(=O)(=O)[NH-]",
+        "chrg_HA":   "0",              "chrg_A": "-1",
+        "pKa_ref":   10.0,
+        "label":     "Sulfonamide (ref: methanesulfonamide, pKa 10.0)",
+        "rxn":       "[S;$(S(=O)(=O))][NX3H1:1]>>[S;$(S(=O)(=O))][NX3-:1]",
+        "direction": "deprotonate",
+    },
 }
 
 def _xtb_available():
@@ -168,13 +180,22 @@ def _protonate_amine(mol):
     raise ValueError("No protonatable amine nitrogen found")
 
 def _detect_ionizable_groups(mol):
+    # Priority order matters — sulfonamide must be checked before amine
+    # so that -S(=O)(=O)-NH- is not mis-classified as a basic amine.
+    # Aromatic amines (aniline, pKa ~2–4) are also excluded from "amine"
+    # because their pKa is far from the ethylamine reference (10.7) and
+    # the isodesmic correction would be unreliable.
     patterns = {
-        "amine":  "[NX3;H1,H2;!$(NC=O)]",
-        "acid":   "[CX3](=O)[OX2H1]",
-        "phenol": "[OX2H][c]",
+        "sulfonamide": "[S;$(S(=O)(=O))][NX3;H1]",           # -S(=O)(=O)-NH- (acidic)
+        "amine":       "[NX3;H1,H2;!$(NC=O);!$(NS(=O));!$([N]a)]",  # aliphatic amine only
+        "acid":        "[CX3](=O)[OX2H1]",                   # carboxylic acid
+        "phenol":      "[OX2H][c]",                          # phenol
     }
-    found = [g for g, p in patterns.items()
-             if mol.HasSubstructMatch(Chem.MolFromSmarts(p))]
+    found = []
+    for g, p in patterns.items():
+        pat = Chem.MolFromSmarts(p)
+        if pat and mol.HasSubstructMatch(pat):
+            found.append(g)
     return found if found else ["unknown"]
 
 def run_xtb_pka(smiles_str: str, tmp_dir: Path) -> list[dict]:
