@@ -549,6 +549,7 @@ def run_job(
     enumerate_stereoisomers: bool = True,
     charge_mode: str = "AUTO",
     use_iupac_pka: bool = True,
+    xtb_results_map: dict | None = None,
 ) -> Dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -738,7 +739,15 @@ def run_job(
         summary_lines.append(f"  Formal Charge (pH {target_pH}): {r['formal_charge']:+d}")
         summary_lines.append(f"  Zwitterion (strict)  : {'YES' if r.get('is_zwitterion') else 'NO'}")
         summary_lines.append(f"  + atoms / − atoms    : {r.get('n_pos_atoms', 0)} / {r.get('n_neg_atoms', 0)}")
-        
+        if xtb_results_map:
+            base_smi = r["base_smiles"]
+            xtb_res  = xtb_results_map.get(base_smi, [])
+            for xr in xtb_res:
+                if xr["pKa"] is not None:
+                    summary_lines.append(
+                        f"  xTB pKa ({xr['group']:8s})  : {xr['pKa']:.1f}  "
+                        f"[ΔE={xr['dE_kcal']:+.3f} kcal/mol]"
+                    )
         # Show what formats were actually generated
         generated_formats = []
         if "minimized_pdb" in r:
