@@ -312,49 +312,95 @@ st.sidebar.header("🔬 pKa Prediction")
 # IUPAC is always attempted first — both methods share this behaviour
 use_iupac_pka = True
 
-# Always show the IUPAC-first note
 st.sidebar.markdown(
     "🗄️ **IUPAC pKa database** is always checked first.  \n"
-    "The toggle below selects the **fallback method** used when no IUPAC match is found.")
+    "Select the **fallback method** when no IUPAC match is found:")
 
 xtb_available = _xtb_available()
 
-# Toggle label changes to reflect xTB availability
-_toggle_label = (
-    "Fallback: pKaPredict ML  ·  xTB GFN2/ALPB ⚛️"
+# Inject CSS to make the radio look like a segmented button group
+st.sidebar.markdown("""
+<style>
+div[data-testid="stRadio"] > label {
+    display: none;
+}
+div[data-testid="stRadio"] > div {
+    display: flex;
+    flex-direction: row;
+    gap: 0px;
+}
+div[data-testid="stRadio"] > div > label {
+    flex: 1;
+    text-align: center;
+    padding: 6px 4px;
+    border: 1.5px solid #d0d0d0;
+    border-radius: 0px;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 500;
+    background: #f8f8f8;
+    color: #444;
+    transition: background 0.15s;
+    margin: 0 !important;
+}
+div[data-testid="stRadio"] > div > label:first-child {
+    border-radius: 8px 0px 0px 8px;
+    border-right: none;
+}
+div[data-testid="stRadio"] > div > label:last-child {
+    border-radius: 0px 8px 8px 0px;
+}
+div[data-testid="stRadio"] > div > label:has(input:checked) {
+    background: #1f77b4;
+    color: white;
+    border-color: #1f77b4;
+}
+div[data-testid="stRadio"] > div > label > div {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+div[data-testid="stRadio"] > div > label > div > div {
+    display: none;
+}
+</style>
+""", unsafe_allow_html=True)
+
+_pka_options = (
+    ["🤖 pKaPredict ML", "⚛️ xTB GFN2/ALPB"]
     if xtb_available
-    else "Fallback: pKaPredict ML  ·  xTB ⚠️ (not installed)"
+    else ["🤖 pKaPredict ML", "⚛️ xTB (unavailable)"]
 )
 
-# st.toggle: False = pKaPredict ML, True = xTB
-_xtb_toggle = st.sidebar.toggle(
-    _toggle_label,
-    value=False,
-    disabled=not xtb_available,
+pka_method = st.sidebar.radio(
+    "pKa fallback method",
+    options=_pka_options,
+    index=0,
+    horizontal=True,
+    disabled=False,
+    label_visibility="collapsed",
     help=(
-        "**OFF → pKaPredict ML**\n"
-        "IUPAC database checked first; if no match, the ML model predicts pKa.\n\n"
-        "**ON → xTB GFN2/ALPB(water)**\n"
-        "IUPAC database checked first; if matched, IUPAC pKa is shown alongside xTB. "
-        "If no IUPAC match, xTB isodesmic pKa is the sole source (ML is skipped). "
-        "Supports amine / carboxylic acid / phenol groups. Accuracy ±1–2 pKa units."
+        "**🤖 pKaPredict ML:** IUPAC database first → ML model if no match\n\n"
+        "**⚛️ xTB GFN2/ALPB:** IUPAC database first → xTB isodesmic pKa if no match "
+        "(ML is skipped). Supports amine / carboxylic acid / phenol. Accuracy ±1–2 pKa units."
         if xtb_available
-        else "**xTB is not available** — install xTB to enable quantum-chemical pKa."
+        else "**⚛️ xTB** is not installed — install xTB to enable."
     ),
 )
 
-use_xtb_pka = _xtb_toggle and xtb_available
+use_xtb_pka = ("xTB" in pka_method) and xtb_available
 
 # Active strategy caption
 if use_xtb_pka:
     st.sidebar.caption(
-        "⚛️ Active: IUPAC → xTB GFN2/ALPB  |  no IUPAC match → xTB only (ML skipped)")
+        "⚛️ Active: IUPAC → xTB GFN2/ALPB  |  no match → xTB only (ML skipped)")
 else:
     st.sidebar.caption(
-        "🤖 Active: IUPAC → pKaPredict ML  |  no IUPAC match → ML only")
+        "🤖 Active: IUPAC → pKaPredict ML  |  no match → ML only")
 
 if not xtb_available:
-    st.sidebar.caption("⚠️ xTB binary not found in PATH — toggle disabled.")
+    st.sidebar.caption("⚠️ xTB binary not found in PATH — install xTB to enable.")
 
 st.sidebar.header("📄 Output Format")
 output_formats = st.sidebar.multiselect(
