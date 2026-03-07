@@ -509,20 +509,16 @@ def display_ligand_result(result, out_dir, show_2d, show_3d,
             if xtb_pkas:
                 for xr in xtb_pkas:
                     st.markdown(
-                        f"**xTB pKa ({xr['group']})** = `{xr['pKa']:.1f}`  "
-                        f"(ΔE = {xr['dE_kcal']:+.3f} kcal/mol) &nbsp;|&nbsp; "
-                        f"Method: GFN2-xTB / ALPB(water) &nbsp;|&nbsp; "
-                        f"Accuracy: ±1–2 pKa units")
+                        f"**xTB pKa ({xr['group']}):** `{xr['pKa']:.1f}` "
+                        f"| Method: GFN2-xTB / ALPB(water) | Accuracy: ±1–2 pKa units")
 
         elif pka_source == "xTB" or (use_xtb_pka and not iupac_matched):
             # No IUPAC match + xTB enabled → xTB only, skip ML
             if xtb_pkas:
                 for xr in xtb_pkas:
                     st.markdown(
-                        f"**xTB pKa ({xr['group']})** = `{xr['pKa']:.1f}`  "
-                        f"(ΔE = {xr['dE_kcal']:+.3f} kcal/mol) &nbsp;|&nbsp; "
-                        f"Method: GFN2-xTB / ALPB(water) &nbsp;|&nbsp; "
-                        f"Accuracy: ±1–2 pKa units")
+                        f"**xTB pKa ({xr['group']}):** `{xr['pKa']:.1f}` "
+                        f"| Method: GFN2-xTB / ALPB(water) | Accuracy: ±1–2 pKa units")
                 st.caption(
                     "⚛️ No IUPAC match — xTB GFN2/ALPB(water) used as sole pKa source")
             else:
