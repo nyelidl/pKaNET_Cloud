@@ -82,15 +82,16 @@ XTB_REFERENCES = {
         "direction": "deprotonate",
     },
     "sulfonamide": {
-        # Sulfonamide NH is ACIDIC (deprotonates), not basic.
-        # Reference: methanesulfonamide pKa ~10.0 (aliphatic)
-        # Aryl sulfonamides (e.g. sulfamethoxazole) are ~5–6 — the
-        # isodesmic correction handles the difference automatically.
+        # Sulfonamide -S(=O)(=O)-NH- is ACIDIC (deprotonates at pKa ~5–10).
+        # Reference: methanesulfonamide pKa 10.0 (aliphatic).
+        # Aryl sulfonamides (e.g. sulfamethoxazole pKa 5.7) are corrected
+        # automatically by the isodesmic ΔE term.
+        # SMARTS: map only the N atom; the S(=O)(=O) context ensures correct match.
         "HA_smi":    "CS(=O)(=O)N",   "A_smi":  "CS(=O)(=O)[NH-]",
         "chrg_HA":   "0",              "chrg_A": "-1",
         "pKa_ref":   10.0,
         "label":     "Sulfonamide (ref: methanesulfonamide, pKa 10.0)",
-        "rxn":       "[S;$(S(=O)(=O))][NX3H1:1]>>[S;$(S(=O)(=O))][NX3-:1]",
+        "rxn":       "[NX3;H1:1][S;$(S(=O)(=O))]>>[NX3-;H0:1][S;$(S(=O)(=O))]",
         "direction": "deprotonate",
     },
 }
@@ -181,19 +182,23 @@ def _protonate_amine(mol):
     raise ValueError("No protonatable amine nitrogen found")
 
 def _detect_ionizable_groups(mol):
-    # Priority order matters — sulfonamide must be checked before amine
-    # so that -S(=O)(=O)-NH- is not mis-classified as a basic amine.
-    # Aromatic amines (aniline, pKa ~2–4) are also excluded from "amine"
-    # because their pKa is far from the ethylamine reference (10.7) and
-    # the isodesmic correction would be unreliable.
-    patterns = {
-        "sulfonamide": "[S;$(S(=O)(=O))][NX3;H1]",           # -S(=O)(=O)-NH- (acidic)
-        "amine":       "[NX3;H1,H2;!$(NC=O);!$(NS(=O));!$([N]a)]",  # aliphatic amine only
-        "acid":        "[CX3](=O)[OX2H1]",                   # carboxylic acid
-        "phenol":      "[OX2H][c]",                          # phenol
-    }
+    # Detection order matters: sulfonamide MUST be checked before amine so
+    # that -S(=O)(=O)-NH- is classified as acidic (deprotonate, pKa ~5–10)
+    # rather than basic (protonate, pKa ~10). Both SMARTS would otherwise
+    # match the same N atom.
+    #
+    # Amine pattern excludes sulfonamide NH via !$(NS(=O)(=O)) so that
+    # molecules like sulfamethoxazole only report sulfonamide, not amine.
+    # Aromatic amines (aniline) are kept in amine — the isodesmic correction
+    # shifts them into the correct acidic range naturally.
+    patterns_ordered = [
+        ("sulfonamide", "[NX3;H1][S;$(S(=O)(=O))]"),
+        ("amine",       "[NX3;H1,H2;!$(NC=O);!$(N[S;$(S(=O)(=O))])]"),
+        ("acid",        "[CX3](=O)[OX2H1]"),
+        ("phenol",      "[OX2H][c]"),
+    ]
     found = []
-    for g, p in patterns.items():
+    for g, p in patterns_ordered:
         pat = Chem.MolFromSmarts(p)
         if pat and mol.HasSubstructMatch(pat):
             found.append(g)
@@ -213,7 +218,7 @@ def run_xtb_pka(smiles_str: str, tmp_dir: Path) -> list[dict]:
         if group == "unknown":
             results.append({
                 "group": "unknown", "label": "No ionizable group detected",
-                "pKa": None, "error": "No amine / carboxylic acid / phenol found",
+                "pKa": None, "error": "No amine / sulfonamide / carboxylic acid / phenol found",
             })
             continue
 
