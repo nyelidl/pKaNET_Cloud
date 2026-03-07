@@ -61,7 +61,7 @@ XTB_REFERENCES = {
         "chrg_HA":   "+1",        "chrg_A": "0",
         "pKa_ref":   10.7,
         "label":     "Amine (ref: ethylamine, pKa 10.7)",
-        "rxn":       "[NX3;H1,H2;!$(NC=O):1]>>[NH3+:1]",
+        "rxn":       None,          # handled by _protonate_amine() — avoids valence error
         "direction": "protonate",
     },
     "acid": {
@@ -129,6 +129,44 @@ def _run_rxn(mol, smarts):
     Chem.SanitizeMol(prod)
     return prod
 
+
+def _protonate_amine(mol):
+    """Safely add exactly one proton to the first free amine nitrogen.
+
+    Works for primary (R-NH2 → R-NH3+), secondary (R2-NH → R2-NH2+), and
+    tertiary (R3-N → R3-NH+) amines without hitting the valence error that
+    the hard-coded [NH3+] SMARTS causes on secondary/tertiary centres.
+    """
+    from rdkit.Chem import RWMol
+    amide_pat = Chem.MolFromSmarts("[N;$(NC=O)]")
+    rwmol = RWMol(Chem.AddHs(mol))
+    for atom in rwmol.GetAtoms():
+        if atom.GetAtomicNum() != 7:
+            continue
+        if atom.GetFormalCharge() != 0:
+            continue
+        # Skip amide nitrogens
+        if mol.HasSubstructMatch(amide_pat):
+            amide_idxs = {m[0] for m in mol.GetSubstructMatches(amide_pat)}
+            if atom.GetIdx() in amide_idxs:
+                continue
+        total_h = atom.GetTotalNumHs()
+        if total_h == 0:
+            continue
+        # Add exactly one proton
+        atom.SetFormalCharge(1)
+        atom.SetNoImplicit(True)
+        atom.SetNumExplicitHs(total_h + 1)
+        try:
+            Chem.SanitizeMol(rwmol)
+            return Chem.RemoveHs(rwmol.GetMol())
+        except Exception:
+            # Roll back and try the next nitrogen
+            atom.SetFormalCharge(0)
+            atom.SetNoImplicit(False)
+            atom.SetNumExplicitHs(total_h)
+    raise ValueError("No protonatable amine nitrogen found")
+
 def _detect_ionizable_groups(mol):
     patterns = {
         "amine":  "[NX3;H1,H2;!$(NC=O)]",
@@ -169,11 +207,15 @@ def run_xtb_pka(smiles_str: str, tmp_dir: Path) -> list[dict]:
                 str(tmp_dir / "Aref.xyz")))
 
             if ref["direction"] == "protonate":
-                HA_guest, A_guest = _run_rxn(mol, ref["rxn"]), mol
-                chrg_HA, chrg_A   = "+1", "0"
+                # Use safe per-atom protonation — avoids valence errors on
+                # secondary/tertiary amines that [NH3+] SMARTS cannot handle
+                HA_guest = _protonate_amine(mol)
+                A_guest  = mol
+                chrg_HA, chrg_A = "+1", "0"
             else:
-                HA_guest, A_guest = mol, _run_rxn(mol, ref["rxn"])
-                chrg_HA, chrg_A   = "0", "-1"
+                HA_guest = mol
+                A_guest  = _run_rxn(mol, ref["rxn"])
+                chrg_HA, chrg_A = "0", "-1"
 
             E_HA = _get_energy(_run_xtb_calc(
                 HA_guest, f"--opt --alpb water --chrg {chrg_HA}",
