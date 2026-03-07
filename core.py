@@ -549,6 +549,7 @@ def run_job(
     enumerate_stereoisomers: bool = True,
     charge_mode: str = "AUTO",
     use_iupac_pka: bool = True,
+    use_xtb_pka: bool = False,
     xtb_results_map: dict | None = None,
 ) -> Dict[str, Any]:
     out = Path(out_dir)
@@ -635,19 +636,39 @@ def run_job(
 
         base_smiles = lig["base_smiles"]
 
-        # Predict pKa with IUPAC lookup first, then ML
-        pka_pred = None
-        pka_source = None
-        pka_n = None
+        # ── pKa Prediction ──────────────────────────────────────────────
+        # Logic:
+        #   IUPAC checked, xTB off  → IUPAC if matched, else ML
+        #   IUPAC checked, xTB on   → IUPAC if matched (xTB shown alongside in app)
+        #                              if no IUPAC match → None (xTB only, skip ML)
+        #   IUPAC off,     xTB on   → None (xTB only, skip ML)
+        #   IUPAC off,     xTB off  → ML only
+        pka_pred          = None
+        pka_source        = None
+        pka_n             = None
+        pka_iupac_matched = False
+
         try:
             if use_iupac_pka:
-                pka_pred, pka_source, meta = get_pka_iupac_else_ml(base_smiles)
-                if meta and "n" in meta:
-                    pka_n = meta["n"]
-            else:
-                pka_pred = predict_pka_pkanet(base_smiles)
-                pka_source = "pKaPredict (ML)"
-            print(f"pKa ({pka_source}) for {pretty_name}: {pka_pred:.2f}")
+                stats = lookup_pka_iupac_stats(base_smiles)
+                if stats is not None:
+                    pka_pred          = stats["pka_median"]
+                    pka_source        = f"IUPAC (n={stats['n']})"
+                    pka_n             = stats["n"]
+                    pka_iupac_matched = True
+                    print(f"pKa (IUPAC, n={stats['n']}) for {pretty_name}: {pka_pred:.2f}")
+
+            if pka_pred is None:
+                # No IUPAC match (or IUPAC disabled)
+                if use_xtb_pka:
+                    # Skip ML — xTB result will be the sole pKa source
+                    pka_source = "xTB"
+                    print(f"No IUPAC match for {pretty_name} — will use xTB pKa only.")
+                else:
+                    pka_pred   = predict_pka_pkanet(base_smiles)
+                    pka_source = "pKaPredict (ML)"
+                    print(f"pKa (pKaPredict ML) for {pretty_name}: {pka_pred:.2f}")
+
         except Exception as e:
             print(f"Warning: pKa prediction failed for {pretty_name}: {e}")
             warning_msg = f"pKa prediction failed for {pretty_name}: {str(e)}"
@@ -685,6 +706,7 @@ def run_job(
             "pka_pred": pka_pred,
             "pka_source": pka_source,
             "pka_n": pka_n,
+            "pka_iupac_matched":  pka_iupac_matched,
             "formal_charge": formal_charge,
             "has_pos": charge_prof["has_pos"],
             "has_neg": charge_prof["has_neg"],
@@ -727,14 +749,34 @@ def run_job(
         summary_lines.append(f"  Base SMILES          : {r['base_smiles']}")
         summary_lines.append(f"  pH-adjusted SMILES   : {r['ph_smiles']}")
         
-        # Format pKa value safely
+# Format pKa value safely
         if r['pka_pred'] is not None:
-            pka_str = f"{r['pka_pred']:.2f}"
-            if r.get('pka_source'):
-                pka_str += f" ({r['pka_source']})"
+            pka_str = f"{r['pka_pred']:.2f} ({r['pka_source']})"
             summary_lines.append(f"  Predicted pKa        : {pka_str}")
+        elif r.get('pka_source') == "xTB":
+            summary_lines.append(f"  Predicted pKa        : see xTB results below")
         else:
             summary_lines.append(f"  Predicted pKa        : N/A")
+
+        # xTB pKa results (if xtb_results_map was passed in)
+        if xtb_results_map:
+            base_smi = r["base_smiles"]
+            xtb_res  = xtb_results_map.get(base_smi, [])
+            for xr in xtb_res:
+                if xr["pKa"] is not None:
+                    summary_lines.append(
+                        f"  xTB pKa ({xr['group']:8s})  : {xr['pKa']:.1f}  "
+                        f"[ΔE={xr['dE_kcal']:+.3f} kcal/mol]"
+                    )
+```
+
+This block sits immediately **after** the zwitterion/charge lines and **before** the `generated_formats` block, so the final order in the summary for each molecule is:
+```
+  Predicted pKa        : 4.75 (IUPAC n=3)     ← or "see xTB results below"
+  xTB pKa (acid    )   : 4.6  [ΔE=−0.203 kcal/mol]
+  Formal Charge        : 0
+  Zwitterion           : NO
+  Output Formats       : PDB, SDF
             
         summary_lines.append(f"  Formal Charge (pH {target_pH}): {r['formal_charge']:+d}")
         summary_lines.append(f"  Zwitterion (strict)  : {'YES' if r.get('is_zwitterion') else 'NO'}")
