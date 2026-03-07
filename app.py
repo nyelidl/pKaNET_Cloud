@@ -394,23 +394,12 @@ _pka_options = (
     else ["pKaPredict ML", "xTB GFN2 (unavailable)"]
 )
 
-pka_method = st.sidebar.radio(
-    "pKa fallback method",
-    options=_pka_options,
-    index=0,
-    horizontal=True,
-    disabled=False,
-    label_visibility="collapsed",
-    help=(
-        "**🤖 pKaPredict ML:** IUPAC database first → ML model if no match\n\n"
-        "**⚛️ xTB GFN2/ALPB:** IUPAC database first → xTB isodesmic pKa if no match "
-        "(ML is skipped). Supports amine / carboxylic acid / phenol. Accuracy ±1–2 pKa units."
-        if xtb_available
-        else "**⚛️ xTB** is not installed — install xTB to enable."
-    ),
+pka_method = st.sidebar.segmented_control(
+    "Fallback method (if no IUPAC match)",
+    options=["pKaPredict ML", "xTB GFN2"],
+    default="pKaPredict ML",
 )
-
-use_xtb_pka = ("xTB" in pka_method) and xtb_available
+use_xtb_pka = (pka_method == "xTB GFN2") and xtb_available
 
 # Active strategy caption
 if use_xtb_pka:
