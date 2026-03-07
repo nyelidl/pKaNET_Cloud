@@ -54,6 +54,7 @@ st.markdown(
 # ═══════════════════════════════════════════════════════════════════════════
 HARTREE_TO_KCAL = 627.51
 RT_LN10         = 1.36   # kcal/mol at 298 K
+XTB_DE_MAX_KCAL = 50.0   # sanity threshold — |ΔE| beyond this means bad reaction product
 
 XTB_REFERENCES = {
     "amine": {
@@ -249,6 +250,22 @@ def run_xtb_pka(smiles_str: str, tmp_dir: Path) -> list[dict]:
             dpKa    = dE_kcal / RT_LN10
             pKa_xtb = ref["pKa_ref"] + dpKa
 
+            # Sanity check — huge ΔE means the reaction SMARTS produced a
+            # chemically wrong product (e.g. bad valence, wrong atom matched)
+            if abs(dE_kcal) > XTB_DE_MAX_KCAL:
+                results.append({
+                    "group":   group,
+                    "label":   ref["label"],
+                    "pKa":     None,
+                    "dE_kcal": dE_kcal,
+                    "dpKa":    dpKa,
+                    "error":   (
+                        f"ΔE = {dE_kcal:+.1f} kcal/mol exceeds sanity limit "
+                        f"(±{XTB_DE_MAX_KCAL} kcal/mol) — reaction product likely incorrect"
+                    ),
+                })
+                continue
+
             results.append({
                 "group":   group,
                 "label":   ref["label"],
@@ -394,12 +411,23 @@ _pka_options = (
     else ["pKaPredict ML", "xTB GFN2 (unavailable)"]
 )
 
-pka_method = st.sidebar.segmented_control(
-    "Fallback method (if no IUPAC match)",
-    options=["pKaPredict ML", "xTB GFN2"],
-    default="pKaPredict ML",
+pka_method = st.sidebar.radio(
+    "pKa fallback method",
+    options=_pka_options,
+    index=0,
+    horizontal=True,
+    disabled=False,
+    label_visibility="collapsed",
+    help=(
+        "**🤖 pKaPredict ML:** IUPAC database first → ML model if no match\n\n"
+        "**⚛️ xTB GFN2/ALPB:** IUPAC database first → xTB isodesmic pKa if no match "
+        "(ML is skipped). Supports amine / carboxylic acid / phenol. Accuracy ±1–2 pKa units."
+        if xtb_available
+        else "**⚛️ xTB** is not installed — install xTB to enable."
+    ),
 )
-use_xtb_pka = (pka_method == "xTB GFN2") and xtb_available
+
+use_xtb_pka = ("xTB" in pka_method) and xtb_available
 
 # Active strategy caption
 if use_xtb_pka:
@@ -524,19 +552,22 @@ def display_ligand_result(result, out_dir, show_2d, show_3d,
             st.markdown(
                 f"**Predicted pKa ({pka_source}):** `{result['pka_pred']:.2f}`")
             if xtb_pkas:
-                # xTB also enabled — show alongside
                 for xr in xtb_pkas:
                     st.markdown(
-                        f"**xTB pKa ({xr['group']}):** `{xr['pKa']:.1f}` "
-                        f"*(ΔE = {xr['dE_kcal']:+.3f} kcal/mol)*")
+                        f"**xTB pKa ({xr['group']})** = `{xr['pKa']:.1f}`  "
+                        f"(ΔE = {xr['dE_kcal']:+.3f} kcal/mol) &nbsp;|&nbsp; "
+                        f"Method: GFN2-xTB / ALPB(water) &nbsp;|&nbsp; "
+                        f"Accuracy: ±1–2 pKa units")
 
         elif pka_source == "xTB" or (use_xtb_pka and not iupac_matched):
             # No IUPAC match + xTB enabled → xTB only, skip ML
             if xtb_pkas:
                 for xr in xtb_pkas:
                     st.markdown(
-                        f"**xTB pKa ({xr['group']}):** `{xr['pKa']:.1f}` "
-                        f"*(ΔE = {xr['dE_kcal']:+.3f} kcal/mol)*")
+                        f"**xTB pKa ({xr['group']})** = `{xr['pKa']:.1f}`  "
+                        f"(ΔE = {xr['dE_kcal']:+.3f} kcal/mol) &nbsp;|&nbsp; "
+                        f"Method: GFN2-xTB / ALPB(water) &nbsp;|&nbsp; "
+                        f"Accuracy: ±1–2 pKa units")
                 st.caption(
                     "⚛️ No IUPAC match — xTB GFN2/ALPB(water) used as sole pKa source")
             else:
@@ -553,11 +584,17 @@ def display_ligand_result(result, out_dir, show_2d, show_3d,
             st.markdown("**Predicted pKa:** `N/A` ⚠️")
             st.caption("⚠️ pKa prediction unavailable — check warnings below")
 
-        # ── Show xTB errors if any ─────────────────────────────────────
+        # ── Show xTB errors / sanity failures ─────────────────────────
         if xtb_results:
-            xtb_errors = [r for r in xtb_results if r.get("error") and r["group"] != "unknown"]
+            xtb_errors = [r for r in xtb_results
+                          if r.get("error") and r["group"] not in ("unknown",)]
             for xe in xtb_errors:
-                st.caption(f"⚠️ xTB ({xe['group']}): {xe['error']}")
+                if xe.get("dE_kcal") is not None:
+                    st.caption(
+                        f"⚠️ xTB ({xe['group']}): {xe['error']}  "
+                        f"(ΔE = {xe['dE_kcal']:+.1f} kcal/mol)")
+                else:
+                    st.caption(f"⚠️ xTB ({xe['group']}): {xe['error']}")
 
         # ── Charge & zwitterion info ───────────────────────────────────
         st.markdown(f"**Net Formal Charge at pH {target_pH}:** `{result['formal_charge']:+d}`")
