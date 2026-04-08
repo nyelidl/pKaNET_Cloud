@@ -123,9 +123,9 @@ uploaded    = None
 
 if input_type == "SMILES":
     smiles_text = st.text_area(
-        "SMILES",
+        "SMILES   example: CC(=O)OC1=CC=CC=C1C(=O)O",
+        value="CC(=O)OC1=CC=CC=C1C(=O)O",
         height=100,
-        placeholder="e.g.  O=C(N/N=C/CC)C1=NC(C(N/N=C/CC)=O)=CC=C1",
     )
 elif input_type == "SMI_FILE":
     uploaded = st.file_uploader("Upload .smi file (SMILES [name] per line)", type=["smi", "txt"])
@@ -380,7 +380,8 @@ if run_btn:
                         write_alt_3d_for_top_k  = write_alt_3d_for_top_k,
                     )
 
-                    st.success(f"✅ Analysis complete!  |  pKa backend: `{out['pka_backend']}`")
+                    backend_display = out['pka_backend'] if out['pka_backend'] != "none" else "heuristic (SMARTS table)"
+                    st.success(f"✅ Analysis complete!  |  pKa backend: `{backend_display}`")
 
                     # Warnings
                     if out.get("format_warnings"):
