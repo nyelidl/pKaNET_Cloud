@@ -458,7 +458,7 @@ if run_btn:
 st.sidebar.markdown("---")
 st.sidebar.markdown(f"### ℹ️ pKa backend: `{_PKA_BACKEND}`")
 st.sidebar.info("""
-**Pipeline (mirrors notebook):**
+**Pipeline:**
 1. SMILES standardization (RDKit)
 2. PubChem experimental pKa lookup
 3. Tautomer enumeration + SMARTS plausibility scoring
@@ -474,6 +474,7 @@ pkasolver → propka → unipka CLI → heuristic SMARTS table
 st.sidebar.markdown("### 📚 Citation")
 st.sidebar.markdown("""
 - DFDD: Hengphasatporn K. et al. JCIM (2026)
+- Anyone Can Dock: Hengphasatporn K. et al. JCIM (2026)
 - Dimorphite-DL: Ropp PJ et al. J Cheminform (2019)
 - pKaPredict: Floris A. et al. (2022)
 """)
