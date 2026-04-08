@@ -476,7 +476,6 @@ st.sidebar.markdown("""
 - DFDD: Hengphasatporn K. et al. JCIM (2026)
 - Anyone Can Dock: Hengphasatporn K. et al. JCIM (2026)
 - Dimorphite-DL: Ropp PJ et al. J Cheminform (2019)
-- pKaPredict: Floris A. et al. (2022)
 """)
 
 st.sidebar.markdown("### 💡 Examples")
