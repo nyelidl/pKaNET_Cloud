@@ -380,7 +380,7 @@ if run_btn:
                         write_alt_3d_for_top_k  = write_alt_3d_for_top_k,
                     )
 
-                    backend_display = out['pka_backend'] if out['pka_backend'] != "none" else "heuristic (SMARTS table)"
+                    backend_display = out['pka_backend'] if out['pka_backend'] != "fine" else "heuristic (SMARTS table)"
                     st.success(f"✅ Analysis complete!  |  pKa backend: `{backend_display}`")
 
                     # Warnings
