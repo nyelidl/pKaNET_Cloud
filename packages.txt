@@ -1,5 +1,7 @@
 libxrender1
+libxrender-dev
 libxext6
 libsm6
-libxrender-dev
+libice6
+libglib2.0-0
 openbabel
