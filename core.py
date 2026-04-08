@@ -15,8 +15,7 @@ import zipfile
 from pathlib import Path
 
 from rdkit import Chem
-from rdkit.Chem import AllChem
-from rdkit.Chem import inchi as rdinchi
+from rdkit.Chem import AllChem, inchi
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
@@ -129,7 +128,7 @@ def smiles_to_inchikey(smiles: str) -> str | None:
     if mol is None:
         return None
     try:
-        return rdinchi.MolToInchiKey(mol)
+        return Chem.MolToInchiKey(mol)
     except Exception:
         return None
 
@@ -576,7 +575,7 @@ _PENALTY_DEF = [
     ("amide_N_deproton", -5.0, "[$([NX3-]C=O),$([NX3-]c=O)]"),
     ("enol_simple",      -1.2, "[CX3](=[CX3])[OX2H1]"),
 ]
-_CHEM_RULES: list[tuple] = []
+_CHEM_RULES: list[tuple[str, float, Chem.Mol]] = []
 for _lbl, _wt, _sma in _BONUS_DEF + _PENALTY_DEF:
     _pat = Chem.MolFromSmarts(_sma)
     if _pat is not None:
@@ -956,13 +955,7 @@ def build_minimized_3d(smiles: str) -> Chem.Mol:
     p   = AllChem.ETKDGv3(); p.randomSeed = 42
     if AllChem.EmbedMolecule(mol, p) != 0:
         raise ValueError("ETKDG embedding failed.")
-    try:
-        if AllChem.MMFFHasAllMoleculeParams(mol):
-            AllChem.MMFFOptimizeMolecule(mol, maxIters=500)
-        else:
-            AllChem.UFFOptimizeMolecule(mol, maxIters=500)
-    except Exception:
-        pass
+    AllChem.MMFFOptimizeMolecule(mol, maxIters=500)
     return mol
 
 
