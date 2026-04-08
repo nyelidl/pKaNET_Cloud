@@ -1,9 +1,6 @@
 streamlit
 rdkit-pypi
-openbabel-wheel
 dimorphite-dl==2.0.2
-pkapredict
-numpy
-pandas
 requests
+pandas
 Pillow
