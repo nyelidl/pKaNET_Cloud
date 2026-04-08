@@ -244,6 +244,7 @@ def display_ligand_result(r: dict) -> None:
                 file_name=f"{r['name']}_microstates.csv",
                 mime="text/csv",
                 use_container_width=True,
+                key=f"dl_csv_{r['name']}",
             )
 
     # ── 2D / 3D visualization  (mirrors notebook visualize_microstate_rank) ──
