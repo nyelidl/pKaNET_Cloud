@@ -20,7 +20,7 @@ except (ImportError, OSError):
         def MolToImage(*a, **kw):
             return None
 
-st.set_page_config(page_title="pKaNET Cloud", layout="wide", page_icon="🧪")
+st.set_page_config(page_title="pKaNET Cloud+", layout="wide", page_icon="🧪")
 
 st.markdown("""
 <style>
@@ -31,7 +31,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header">🧪 pKaNET Cloud</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🧪 pKaNET Cloud+</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="sub-header">'
     'Tautomer-aware microstate ranking · Henderson–Hasselbalch scoring · '
@@ -497,7 +497,7 @@ CC(C)CC1=CC=C(C=C1)C(C)C(=O)O
 st.markdown("---")
 st.markdown(
     "<div style='text-align:center;color:#666;font-size:0.9rem;'>"
-    "🧬 pKaNET Cloud — "
+    "🧬 pKaNET Cloud+ — "
     "<a href='mailto:kowith@ccs.tsukuba.ac.jp'>kowith@ccs.tsukuba.ac.jp</a>"
     "</div>",
     unsafe_allow_html=True,
