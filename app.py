@@ -187,7 +187,7 @@ def show_microstate_table(top_microstates: list) -> None:
 # Helper: display one ligand result  (mirrors notebook lines 1280-1355)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def display_ligand_result(r: dict) -> None:
+def display_ligand_result(r: dict, idx: int = 0) -> None:
     t = (r["top_microstates"] or [{}])[0]
 
     # ── Rank-1 summary (mirrors notebook print block lines 1285-1297) ────────
@@ -244,7 +244,7 @@ def display_ligand_result(r: dict) -> None:
                 file_name=f"{r['name']}_microstates.csv",
                 mime="text/csv",
                 use_container_width=True,
-                key=f"dl_csv_{r['name']}",
+                key=f"dl_csv_{idx}",
             )
 
     # ── 2D / 3D visualization  (mirrors notebook visualize_microstate_rank) ──
@@ -400,11 +400,11 @@ if run_btn:
                     results = out["results"]
                     if len(results) > 1:
                         tabs = st.tabs([r["name"] for r in results])
-                        for tab, r in zip(tabs, results):
+                        for i, (tab, r) in enumerate(zip(tabs, results)):
                             with tab:
-                                display_ligand_result(r)
+                                display_ligand_result(r, idx=i)
                     else:
-                        display_ligand_result(results[0])
+                        display_ligand_result(results[0], idx=0)
 
                     # Downloads
                     st.header("💾 Downloads")
