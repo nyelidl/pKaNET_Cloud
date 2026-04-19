@@ -1,6 +1,20 @@
-# core.py  —  pKaNET Cloud
+# core.py  —  pKaNET Cloud  (refined)
 # Direct port of the Colab notebook pipeline to Streamlit.
 # Logic, function signatures, and result keys match the notebook exactly.
+#
+# ─── REFINEMENT (2026-04) ────────────────────────────────────────────────────
+# Fix for polyphenol tautomer misranking (e.g. baicalein, quercetin, catechol,
+# pyrogallol): RDKit's TautomerEnumerator produces non-aromatic poly-keto
+# tautomers of aromatic polyphenols which the old scorer ranked above the
+# correct aromatic form. We now:
+#   (a) compare aromatic-ring count of each enumerated tautomer against the
+#       input (reference) and apply a hard penalty per ring lost;
+#   (b) add SMARTS penalties for the classic traps (pyrogallol-triketo,
+#       catechol-diketo, phenol→ring-ketone flips);
+#   (c) add a small bonus for phenolic OH preservation.
+# All public names (run_job, zip_all_outputs, zip_minimized_structures,
+# DISPLAY_COLS, _PKA_BACKEND) are unchanged so app.py keeps working.
+# ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
 import inspect
@@ -15,7 +29,7 @@ import zipfile
 from pathlib import Path
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, inchi
+from rdkit.Chem import AllChem, inchi, rdMolDescriptors
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
@@ -28,6 +42,14 @@ BORDERLINE_PKA_WINDOW        = 1.0
 PUBCHEM_RATE_LIMIT_S         = 0.25
 PUBCHEM_CACHE_FILE           = "/tmp/pkanet_pubchem_cache.json"
 SEP = "=" * 70
+
+# ─── Aromaticity-guard weights (new, in plausibility-score units) ───────────
+# Scale matches existing _BONUS_DEF / _PENALTY_DEF weights (roughly kcal/mol).
+W_AROM_RING_LOST         = 8.0   # per aromatic ring that disappears vs input
+W_PHENOL_TO_KETO_FLIP    = 6.0   # per phenolic Ar-OH that becomes a ring C=O
+W_PYROGALLOL_TRIKETO     = 6.0   # extra penalty for 1,2,3-triketo motif
+W_CATECHOL_DIKETO        = 4.0   # extra penalty for 1,2-diketo on sp3 ring
+W_PHENOL_PRESERVED_BONUS = 0.5   # small bonus per preserved phenolic OH
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Optional dependency probes  (notebook lines 43-88)
@@ -567,6 +589,8 @@ _BONUS_DEF = [
     ("urea_NH",          +1.5, "[NX3;H1][CX3](=O)[NX3;H1,H2]"),
     ("thioamide",        +1.0, "[CX3](=S)[NX3;H1,H2]"),
     ("aromatic_ring",    +0.3, "c1ccccc1"),
+    # ── NEW: phenol preservation bonus (small, per phenolic OH) ─────────────
+    ("phenol_preserved", W_PHENOL_PRESERVED_BONUS, "c[OX2H1]"),
 ]
 _PENALTY_DEF = [
     ("imidic_acid_open", -4.0, "[CX3;!R](=[NX2])[OX2H1]"),
@@ -574,12 +598,24 @@ _PENALTY_DEF = [
     ("iminol_general",   -3.5, "[NX2]=[CX3][OX2H1]"),
     ("amide_N_deproton", -5.0, "[$([NX3-]C=O),$([NX3-]c=O)]"),
     ("enol_simple",      -1.2, "[CX3](=[CX3])[OX2H1]"),
+    # ── NEW: aromaticity-destroying keto-tautomer traps ─────────────────────
+    # Pyrogallol → 1,2,3-triketo cyclohexane/ene (baicalein, gallic acid …)
+    ("pyrogallol_triketo", -W_PYROGALLOL_TRIKETO,
+        "[#6;!a;R]1(=O)[#6;!a;R](=O)[#6;!a;R](=O)[#6;R][#6;R][#6;R]1"),
+    # Catechol → 1,2-diketo on a non-aromatic six-membered ring
+    ("catechol_diketo",    -W_CATECHOL_DIKETO,
+        "[#6;!a;R]1(=O)[#6;!a;R](=O)[#6;R][#6;R][#6;R][#6;R]1"),
+    # Ortho para-quinone forms of phenols (loss of aromaticity on 6-ring)
+    ("ring_carbonyl_onaromring_former", -3.0,
+        "[#6;!a;R](=O)[#6;!a;R]=[#6;!a;R]"),
 ]
 _CHEM_RULES: list[tuple[str, float, Chem.Mol]] = []
 for _lbl, _wt, _sma in _BONUS_DEF + _PENALTY_DEF:
     _pat = Chem.MolFromSmarts(_sma)
     if _pat is not None:
         _CHEM_RULES.append((_lbl, _wt, _pat))
+    else:
+        print(f"⚠️  SMARTS compile failed: {_lbl}")
 
 _TAUTOMER_RICH_DEF = [
     ("imidazole",    "[nH]1ccnc1"),
@@ -597,18 +633,63 @@ _TAUTOMER_RICH_COMPILED = [
 ]
 
 
-def score_tautomer_plausibility(smiles: str) -> tuple[float, dict]:
+# ─── Aromaticity comparison helper (NEW) ─────────────────────────────────────
+def _n_aromatic_rings(mol: Chem.Mol | None) -> int:
+    if mol is None:
+        return 0
+    try:
+        return int(rdMolDescriptors.CalcNumAromaticRings(mol))
+    except Exception:
+        return 0
+
+
+def _count_phenolic_OH(mol: Chem.Mol | None) -> int:
+    if mol is None:
+        return 0
+    patt = Chem.MolFromSmarts("c[OX2H1]")
+    if patt is None:
+        return 0
+    return len(mol.GetSubstructMatches(patt))
+
+
+def score_tautomer_plausibility(
+    smiles: str,
+    ref_mol: Chem.Mol | None = None,
+) -> tuple[float, dict]:
+    """Score a tautomer. If ref_mol is given, also penalize aromatic-ring loss
+    and phenol→ring-ketone flips relative to the reference (input) molecule."""
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return -999.0, {}
     bd: dict[str, float] = {}
     total = 0.0
+
+    # Static SMARTS bonuses / penalties (existing + new traps)
     for lbl, wt, pat in _CHEM_RULES:
         n = len(mol.GetSubstructMatches(pat))
         if n:
             c = wt * n
             bd[lbl] = round(c, 3)
             total  += c
+
+    # ── NEW: reference-aware aromaticity & phenol-preservation penalties ────
+    if ref_mol is not None:
+        n_arom_ref  = _n_aromatic_rings(ref_mol)
+        n_arom_taut = _n_aromatic_rings(mol)
+        rings_lost  = max(0, n_arom_ref - n_arom_taut)
+        if rings_lost > 0:
+            pen = -W_AROM_RING_LOST * rings_lost
+            bd["arom_ring_lost_vs_input"] = round(pen, 3)
+            total += pen
+
+        n_phenol_ref  = _count_phenolic_OH(ref_mol)
+        n_phenol_taut = _count_phenolic_OH(mol)
+        phenols_lost  = max(0, n_phenol_ref - n_phenol_taut)
+        if phenols_lost > 0:
+            pen = -W_PHENOL_TO_KETO_FLIP * phenols_lost
+            bd["phenol_flipped_to_keto"] = round(pen, 3)
+            total += pen
+
     bd["_total"] = round(total, 3)
     return total, bd
 
@@ -627,25 +708,35 @@ def enumerate_and_filter_tautomers(
     if mol is None:
         raise ValueError(f"Bad SMILES: {smiles[:60]}")
 
+    # Reference molecule for aromaticity/phenol comparison (the INPUT).
+    ref_mol = mol
+
     tr_flag, tr_motifs = is_tautomer_rich(mol)
     enum  = rdMolStandardize.TautomerEnumerator()
     seen: set[str] = set()
     scored: list[dict] = []
+
+    # Always include the input canonical form in the pool so it can win even if
+    # the enumerator reorders or omits it.
+    input_canon = Chem.MolToSmiles(mol, isomericSmiles=True, canonical=True)
+    seen.add(input_canon)
+    sc0, bd0 = score_tautomer_plausibility(input_canon, ref_mol=ref_mol)
+    scored.append({"smiles": input_canon, "score": sc0, "breakdown": bd0})
 
     for tmol in enum.Enumerate(mol):
         smi = Chem.MolToSmiles(tmol, isomericSmiles=True, canonical=True)
         if smi in seen:
             continue
         seen.add(smi)
-        sc, bd = score_tautomer_plausibility(smi)
+        sc, bd = score_tautomer_plausibility(smi, ref_mol=ref_mol)
         scored.append({"smiles": smi, "score": sc, "breakdown": bd})
 
     if not scored:
         smi = Chem.MolToSmiles(mol, isomericSmiles=True, canonical=True)
-        sc, bd = score_tautomer_plausibility(smi)
+        sc, bd = score_tautomer_plausibility(smi, ref_mol=ref_mol)
         scored = [{"smiles": smi, "score": sc, "breakdown": bd}]
 
-    scored     = sorted(scored[:max_states], key=lambda x: -x["score"])
+    scored     = sorted(scored, key=lambda x: -x["score"])[:max_states]
     best       = scored[0]["score"]
     eff_cutoff = cutoff * (2.0 if tr_flag else 1.0)
     kept      = [t for t in scored if t["score"] >= best - eff_cutoff]
@@ -739,6 +830,7 @@ def score_microstate_full(
     ml_predictions:    list[dict],
     pubchem_result:    dict,
     target_ph:         float,
+    ref_mol:           Chem.Mol | None = None,
 ) -> tuple[float, dict, dict, bool]:
     mol = Chem.MolFromSmiles(microstate_smiles)
     if mol is None:
@@ -753,6 +845,15 @@ def score_microstate_full(
     pat_amide_neg = Chem.MolFromSmarts("[$([NX3-]C=O),$([NX3-]c=O)]")
     n_amide_neg   = len(mol.GetSubstructMatches(pat_amide_neg)) if pat_amide_neg else 0
     s_amide_n_dep = -5.0 * n_amide_neg
+
+    # Layer 1b — aromaticity-loss propagation to microstate (NEW)
+    # If the protonated microstate itself lost aromatic rings vs the input,
+    # propagate that penalty here too — protonation changes can mask it.
+    s_arom_loss = 0.0
+    if ref_mol is not None:
+        rings_lost = max(0, _n_aromatic_rings(ref_mol) - _n_aromatic_rings(mol))
+        if rings_lost > 0:
+            s_arom_loss = -W_AROM_RING_LOST * rings_lost
 
     # Layer 2 — tautomer plausibility
     s_tautomer = 0.65 * taut_plausibility
@@ -799,7 +900,8 @@ def score_microstate_full(
         s_improbable -= 0.5 * len(strong_base)
     s_multi = -0.12 * max(0, n_pos + n_neg - 2)
 
-    total = s_amide_n_dep + s_tautomer + s_ph + s_pubchem_bonus + s_zwit + s_improbable + s_multi
+    total = (s_amide_n_dep + s_arom_loss + s_tautomer + s_ph
+             + s_pubchem_bonus + s_zwit + s_improbable + s_multi)
 
     def _has_key(bd: dict, keys: list[str], positive: bool) -> bool:
         return any(bd.get(k, 0) * (1 if positive else -1) > 0 for k in keys)
@@ -807,6 +909,7 @@ def score_microstate_full(
     flag_amide  = _has_key(taut_breakdown, ["amide","lactam","acylhydrazone_NH","hydrazide_NH"], True)
     flag_imidic = _has_key(taut_breakdown, ["imidic_acid_open","lactim_ring","iminol_general"], False)
     flag_lactim = taut_breakdown.get("lactim_ring", 0) < 0
+    flag_arom_lost = s_arom_loss < 0 or taut_breakdown.get("arom_ring_lost_vs_input", 0) < 0
     used_heuristic = not bool(ml_predictions) and not pubchem_result.get("available")
     decision_backend, decision_mode = _label_decision_backend(
         ml_predictions, pubchem_result, used_heuristic)
@@ -816,11 +919,13 @@ def score_microstate_full(
         flag_imidic_acid_penalty           = flag_imidic,
         flag_lactim_penalty                = flag_lactim,
         flag_amide_n_deprotonation_penalty = n_amide_neg > 0,
+        flag_aromaticity_lost              = flag_arom_lost,
         decision_backend                   = decision_backend,
         decision_mode                      = decision_mode,
     )
     bd_full = {
         "s_amide_n_deproton [safety]": round(s_amide_n_dep,   3),
+        "s_aromaticity_loss [safety]": round(s_arom_loss,     3),
         "s_tautomer_plausibility":     round(s_tautomer,      3),
         "s_ph_consistency [HH]":       round(s_ph,            3),
         "s_pubchem_evidence_bonus":    round(s_pubchem_bonus, 3),
@@ -851,6 +956,9 @@ def generate_ranked_microstates(
     if pubchem_result is None:
         pubchem_result = {}
 
+    # Reference molecule used by aromaticity-guard scoring at every layer.
+    ref_mol = Chem.MolFromSmiles(base_smiles)
+
     kept, disc, tr_flag, tr_motifs = enumerate_and_filter_tautomers(
         base_smiles, max_states=max_tautomers, cutoff=TAUTOMER_PLAUSIBILITY_CUTOFF)
     if disc:
@@ -858,8 +966,7 @@ def generate_ranked_microstates(
               f"(e.g. score={disc[0]['score']:.1f}: {disc[0]['smiles'][:55]})")
 
     ml_preds  = unipka_predict(base_smiles)
-    base_mol  = Chem.MolFromSmiles(base_smiles)
-    ion_sites = find_ionizable_sites(base_mol) if base_mol else []
+    ion_sites = find_ionizable_sites(ref_mol) if ref_mol else []
 
     all_micro: list[dict] = []
     seen_smi:  set[str]  = set()
@@ -882,6 +989,7 @@ def generate_ranked_microstates(
                     ml_predictions     = ml_preds,
                     pubchem_result     = pubchem_result,
                     target_ph          = target_ph,
+                    ref_mol            = ref_mol,
                 )
             except Exception as e:
                 print(f"⚠️  Scoring error ({psmi[:40]}): {e}")
@@ -907,6 +1015,7 @@ def generate_ranked_microstates(
                 "flag_imidic_acid_penalty":          cp.get("flag_imidic_acid_penalty",          False),
                 "flag_lactim_penalty":               cp.get("flag_lactim_penalty",               False),
                 "flag_amide_n_deprotonation_penalty":cp.get("flag_amide_n_deprotonation_penalty",False),
+                "flag_aromaticity_lost":             cp.get("flag_aromaticity_lost",             False),
                 "flag_borderline_pka":               bl,
                 "flag_tautomer_rich":                tr_flag,
                 "flag_pubchem_text_ambiguous":       pubchem_result.get("flags",{}).get("vague_or_approximate", False),
@@ -980,7 +1089,8 @@ DISPLAY_COLS = [
     "microstate_smiles", "selection_score", "net_charge", "charged_atoms",
     "decision_backend", "decision_mode",
     "flag_amide_preserved", "flag_imidic_acid_penalty",
-    "flag_amide_n_deprotonation_penalty", "flag_borderline_pka",
+    "flag_amide_n_deprotonation_penalty", "flag_aromaticity_lost",
+    "flag_borderline_pka",
     "flag_pubchem_text_ambiguous", "flag_unipka_used", "pKa_source",
     "delta_from_best",
 ]
@@ -1193,6 +1303,7 @@ def run_job(
                 ("Amide kept",  "YES" if t["flag_amide_preserved"]                else "NO"),
                 ("Imidic acid", "YES ⚠️" if t["flag_imidic_acid_penalty"]         else "NO"),
                 ("[N-]C=O",     "YES ⚠️" if t["flag_amide_n_deprotonation_penalty"] else "NO"),
+                ("Aromaticity", "LOST ⚠️" if t.get("flag_aromaticity_lost")        else "OK"),
                 ("pKa source",  t["pKa_source"]),
                 ("Backend",     f"{t['decision_backend']}  ({t['decision_mode']})"),
             ]:
@@ -1232,7 +1343,7 @@ def run_job(
             if sel_pdb:
                 print(f"💾  {Path(sel_pdb).name}, {Path(sel_sdf).name if sel_sdf else 'no sdf'}")
 
-            # Result dict — exact keys from notebook
+            # Result dict — exact keys from notebook (plus flag_aromaticity_lost)
             results.append({
                 "name":                       pretty,
                 "base_smiles":                can_smi,
@@ -1254,6 +1365,7 @@ def run_job(
                 "flag_amide_preserved":       t["flag_amide_preserved"],
                 "flag_imidic_acid_penalty":   t["flag_imidic_acid_penalty"],
                 "flag_amide_n_deprotonation": t["flag_amide_n_deprotonation_penalty"],
+                "flag_aromaticity_lost":      t.get("flag_aromaticity_lost", False),
                 "flag_borderline_pka":        t["flag_borderline_pka"],
                 "flag_unipka_used":           t["flag_unipka_used"],
                 "microstate_csv":             micro_csv,
@@ -1291,6 +1403,7 @@ def run_job(
             ("Amide preserved",             "YES" if r["flag_amide_preserved"]        else "NO"),
             ("Imidic acid flag",            "YES ⚠️" if r["flag_imidic_acid_penalty"] else "NO"),
             ("[N-]C=O flag",                "YES ⚠️" if r["flag_amide_n_deprotonation"] else "NO"),
+            ("Aromaticity lost",            "YES ⚠️" if r.get("flag_aromaticity_lost") else "NO"),
             ("Ambiguous",                   "YES" if r["ambiguous_top_assignment"]    else "NO"),
         ]:
             print(f"   {k:<28}: {v}")
@@ -1316,6 +1429,7 @@ def run_job(
             f"   Amide preserved   : {'YES' if r['flag_amide_preserved'] else 'NO'}",
             f"   Imidic acid       : {'YES ⚠️' if r['flag_imidic_acid_penalty'] else 'NO'}",
             f"   [N-]C=O           : {'YES ⚠️' if r['flag_amide_n_deprotonation'] else 'NO'}",
+            f"   Aromaticity lost  : {'YES ⚠️' if r.get('flag_aromaticity_lost') else 'NO'}",
             "",
         ]
     summary_text = "\n".join(summary_lines)
