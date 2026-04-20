@@ -519,18 +519,25 @@ def hh_fraction_charged(pka: float, ph: float, site_type: str) -> float:
 def hh_ph_match_score(pka: float, ph: float, site_type: str, actual_charge: int) -> float:
     f_charged = hh_fraction_charged(pka, ph, site_type)
     dpH       = abs(ph - pka)
+    # Decisive-fraction multiplier: when HH predicts a clear winner (≥65% or
+    # ≤35% charged), boost the reward/penalty so borderline sites (e.g. flavone
+    # 6-OH, pKa ~7 at pH 7.4) produce a meaningful score difference between
+    # the correct monoanion and the wrong neutral.
+    decisive = (f_charged >= 0.65) or (f_charged <= 0.35)
+    rwd_mul  = 1.6 if decisive else 1.0
+    pen_mul  = 1.6 if decisive else 1.0
     if site_type == "acid":
         expected_neg = f_charged > 0.5
-        if expected_neg and actual_charge < 0:   return  min(1.2, dpH * 0.45)
-        elif expected_neg:                        return -min(1.0, dpH * 0.35)
-        elif actual_charge >= 0:                  return  0.1
-        else:                                     return -min(1.2, dpH * 0.40)
+        if expected_neg and actual_charge < 0:   return  min(1.5, dpH * 0.55 * rwd_mul) + 0.15
+        elif expected_neg:                        return -min(1.5, dpH * 0.45 * pen_mul) - 0.15
+        elif actual_charge >= 0:                  return  0.15
+        else:                                     return -min(1.5, dpH * 0.45 * pen_mul) - 0.15
     else:
         expected_pos = f_charged > 0.5
-        if expected_pos and actual_charge > 0:    return  min(1.2, dpH * 0.45)
-        elif expected_pos:                        return -min(1.0, dpH * 0.35)
-        elif actual_charge <= 0:                  return  0.1
-        else:                                     return -min(1.2, dpH * 0.40)
+        if expected_pos and actual_charge > 0:    return  min(1.5, dpH * 0.55 * rwd_mul) + 0.15
+        elif expected_pos:                        return -min(1.5, dpH * 0.45 * pen_mul) - 0.15
+        elif actual_charge <= 0:                  return  0.15
+        else:                                     return -min(1.5, dpH * 0.45 * pen_mul) - 0.15
 
 
 _IONIZABLE_SITE_DEF = [
@@ -547,6 +554,26 @@ _IONIZABLE_SITE_DEF = [
     ("hydrazide_NH",       "[CX3](=O)[NX3;H1][NX3;H2]",                        10.5,  "acid"),
     ("urea_NH",            "[NX3;H1][CX3](=O)[NX3;H1,H2]",                     13.0,  "acid"),
     ("amide_NH",           "[CX3](=O)[NX3;H1,H2;!$([N]~N)]",                   15.0,  "acid"),
+    # ── Acidified phenols (must be listed BEFORE generic phenol) ────────────
+    # The first-match-wins logic in find_ionizable_sites means these specific
+    # patterns claim their atoms before the generic 'phenol' rule sees them.
+    #
+    # 1. Phenol between two ring C=O groups (extremely acidic, meldrum-like).
+    ("phenol_diacyl",      "[OX2H1][c;R]1[c;R][c;R](=O)[c;R][c;R][c;R]1=O",     3.5,  "acid"),
+    # 2. Flavone A-ring phenol: handled by post-processing in
+    #    find_ionizable_sites(), which checks whether any phenol-bearing ring
+    #    is fused to a γ-pyrone (4H-chromen-4-one). See below.
+    # 3. Phenol ortho to an aryl/ring C=O (2-hydroxyaryl ketone, salicylate-like).
+    #    Intramolecular H-bond to carbonyl lowers pKa (salicylic acid phenol ~13
+    #    but 2-hydroxyacetophenone ~10, 2-hydroxychromone ~7.5).
+    ("phenol_ortho_CO",    "[OX2H1][c;R]:[c;R][CX3;R](=O)",                      7.8,  "acid"),
+    # 4. ortho-Dihydroxybenzene (catechol): first pKa ~9.4, listed separately
+    #    so it doesn't steal 'phenol' matches inappropriately.
+    ("catechol_OH",        "[OX2H1][c;R]:[c;R][OX2H1]",                          9.4,  "acid"),
+    # 5. Nitrophenol-like (EWG-activated phenol); kept conservative.
+    ("phenol_EWG",         "[OX2H1][c;R]:[c;R][$([NX3](=O)=O),$([CX3]=O),$(C#N),$([SX4](=O)(=O))]",
+                                                                                 7.2,  "acid"),
+    # Generic phenol (fallback, ~10).
     ("phenol",             "c[OX2H1]",                                          10.0,  "acid"),
     ("thiol_arom",         "c[SX2H1]",                                           6.5,  "acid"),
     ("thiol_aliph",        "[CX4][SX2H1]",                                      10.5,  "acid"),
@@ -567,13 +594,87 @@ for _lbl, _sma, _pka_v, _typ in _IONIZABLE_SITE_DEF:
         print(f"⚠️  SMARTS compile failed: {_lbl}")
 
 
+def _chromone_core_atoms(mol: Chem.Mol) -> set[int]:
+    """Return atom indices belonging to any 4H-chromen-4-one (γ-pyrone fused
+    to benzene) system in the molecule. Used to recognize flavonoid-type
+    phenols whose pKa is substantially lower than generic phenol.
+
+    Multiple SMARTS are tried to cover flavones, isoflavones, flavonols,
+    chromones, xanthones, and coumarins with non-standard substitution."""
+    patterns = [
+        # Plain 4H-chromen-4-one (chromone) — matches flavone, flavonol,
+        # isoflavone, baicalein, chrysin, apigenin, etc.
+        "O=c1ccoc2ccccc12",
+        # Flavonol-specific (3-OH flavone): c3 bears an OH
+        "O=c1c(O)c(-[#6])oc2ccccc12",
+        # Explicit flavone with C2-aryl
+        "O=c1cc(-[#6])oc2ccccc12",
+        # Isoflavone (C3-aryl)
+        "O=c1c(-[#6])coc2ccccc12",
+        # Xanthone (dibenzopyranone)
+        "O=c1c2ccccc2oc2ccccc12",
+        # Coumarin (2H-chromen-2-one)  — different isomer but also acidifies
+        # ortho phenols via the lactone carbonyl.
+        "O=c1ccc2ccccc2o1",
+    ]
+    atoms: set[int] = set()
+    for sma in patterns:
+        patt = Chem.MolFromSmarts(sma)
+        if patt is None:
+            continue
+        for match in mol.GetSubstructMatches(patt):
+            atoms.update(match)
+    return atoms
+
+
+def _find_flavone_A_ring_phenols(mol: Chem.Mol) -> list[list[int]]:
+    """Return list of [O_idx, C_idx] pairs for phenolic OHs attached to an
+    aromatic carbon of the A-ring (benzene) of a 4H-chromen-4-one system.
+    Matches baicalein (5,6,7), quercetin, apigenin, luteolin, chrysin, etc."""
+    chromone_atoms = _chromone_core_atoms(mol)
+    if not chromone_atoms:
+        return []
+    phenol_patt = Chem.MolFromSmarts("[c;!$(c(=O))][OX2H1]")
+    if phenol_patt is None:
+        return []
+    hits: list[list[int]] = []
+    for c_idx, o_idx in mol.GetSubstructMatches(phenol_patt):
+        # Require the aromatic C to belong to the chromone core (i.e. to the
+        # benzene ring fused to the γ-pyrone).
+        if c_idx in chromone_atoms:
+            hits.append([o_idx, c_idx])
+    return hits
+
+
 def find_ionizable_sites(mol: Chem.Mol) -> list[dict]:
     sites:  list[dict]     = []
     seen_k: set[frozenset] = set()
+    claimed_atoms: set[int] = set()   # atoms owned by higher-priority passes
+
+    # ── Pass 1: flavonoid A-ring phenols (highest priority — claim first). ──
+    # These must be recognized before the generic 'phenol' rule so their
+    # lowered pKa (~7.0) is used instead of the generic ~10.0.
+    for atoms in _find_flavone_A_ring_phenols(mol):
+        k = frozenset(atoms)
+        if k in seen_k:
+            continue
+        seen_k.add(k)
+        claimed_atoms.update(atoms)
+        sites.append(dict(label="flavone_A_ring_phenol",
+                           atom_indices=atoms,
+                           heuristic_pka=6.5,
+                           site_type="acid"))
+
+    # ── Pass 2: SMARTS-driven generic site list. ────────────────────────────
     for lbl, pat, pka_v, stype in _IONIZABLE_SITES_COMPILED:
         for match in mol.GetSubstructMatches(pat):
             k = frozenset(match)
             if k in seen_k:
+                continue
+            # Skip any match that would re-claim an atom already owned by
+            # the flavone A-ring phenol pass — prevents generic 'phenol'
+            # (pKa 10) from overwriting our flavone-specific pKa 7.
+            if any(a in claimed_atoms for a in match):
                 continue
             seen_k.add(k)
             sites.append(dict(label=lbl, atom_indices=list(match),
@@ -893,11 +994,25 @@ def score_microstate_full(
 
     strong_acid  = [s for s in ion_sites if s["site_type"] == "acid" and (target_ph - s["heuristic_pka"]) > 2.0]
     strong_base  = [s for s in ion_sites if s["site_type"] == "base" and (s["heuristic_pka"] - target_ph) > 2.0]
+    # Also catch "likely deprotonated at pH" (pKa ≤ pH) — including borderline
+    # flavone phenols (pKa ~7) at pH 7.4 where the monoanion is dominant.
+    probable_acid = [s for s in ion_sites if s["site_type"] == "acid"
+                     and (target_ph - s["heuristic_pka"]) > 0.0
+                     and (target_ph - s["heuristic_pka"]) <= 2.0]
+    probable_base = [s for s in ion_sites if s["site_type"] == "base"
+                     and (s["heuristic_pka"] - target_ph) > 0.0
+                     and (s["heuristic_pka"] - target_ph) <= 2.0]
     s_improbable = 0.0
     if strong_acid and net >= 0 and n_neg == 0:
         s_improbable -= 0.5 * len(strong_acid)
     if strong_base and net <= 0 and n_pos == 0:
         s_improbable -= 0.5 * len(strong_base)
+    # Softer penalty when the site is borderline-acid/base but still
+    # thermodynamically favors the charged form at this pH.
+    if probable_acid and net >= 0 and n_neg == 0:
+        s_improbable -= 0.35 * len(probable_acid)
+    if probable_base and net <= 0 and n_pos == 0:
+        s_improbable -= 0.35 * len(probable_base)
     s_multi = -0.12 * max(0, n_pos + n_neg - 2)
 
     total = (s_amide_n_dep + s_arom_loss + s_tautomer + s_ph
