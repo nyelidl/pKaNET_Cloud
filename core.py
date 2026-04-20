@@ -594,55 +594,102 @@ for _lbl, _sma, _pka_v, _typ in _IONIZABLE_SITE_DEF:
         print(f"⚠️  SMARTS compile failed: {_lbl}")
 
 
-def _chromone_core_atoms(mol: Chem.Mol) -> set[int]:
-    """Return atom indices belonging to any 4H-chromen-4-one (γ-pyrone fused
-    to benzene) system in the molecule. Used to recognize flavonoid-type
-    phenols whose pKa is substantially lower than generic phenol.
+def _detect_chromone_system(mol: Chem.Mol) -> set[int]:
+    """Detect 4H-chromen-4-one (γ-pyrone fused to benzene) systems using
+    pure RDKit ring analysis — robust to aromaticity perception edge cases.
 
-    Multiple SMARTS are tried to cover flavones, isoflavones, flavonols,
-    chromones, xanthones, and coumarins with non-standard substitution."""
-    patterns = [
-        # Plain 4H-chromen-4-one (chromone) — matches flavone, flavonol,
-        # isoflavone, baicalein, chrysin, apigenin, etc.
-        "O=c1ccoc2ccccc12",
-        # Flavonol-specific (3-OH flavone): c3 bears an OH
-        "O=c1c(O)c(-[#6])oc2ccccc12",
-        # Explicit flavone with C2-aryl
-        "O=c1cc(-[#6])oc2ccccc12",
-        # Isoflavone (C3-aryl)
-        "O=c1c(-[#6])coc2ccccc12",
-        # Xanthone (dibenzopyranone)
-        "O=c1c2ccccc2oc2ccccc12",
-        # Coumarin (2H-chromen-2-one)  — different isomer but also acidifies
-        # ortho phenols via the lactone carbonyl.
-        "O=c1ccc2ccccc2o1",
-    ]
-    atoms: set[int] = set()
-    for sma in patterns:
-        patt = Chem.MolFromSmarts(sma)
-        if patt is None:
-            continue
-        for match in mol.GetSubstructMatches(patt):
-            atoms.update(match)
-    return atoms
+    Strategy:
+      1. Find all 6-membered rings.
+      2. Identify γ-pyrone rings: contain exactly one ring oxygen AND
+         exactly one ring carbon bearing an exocyclic =O (the C4 carbonyl).
+      3. Find rings fused to a γ-pyrone (share ≥ 2 atoms).
+      4. Return the union of atoms in all such fused ring systems.
+
+    This catches chromones, flavones, flavonols, isoflavones, xanthones,
+    and any molecule where a phenol sits on a ring fused to a γ-pyrone —
+    regardless of aromaticity state or substitution pattern."""
+    ring_info = mol.GetRingInfo()
+    rings = [set(r) for r in ring_info.AtomRings() if len(r) == 6]
+    if not rings:
+        return set()
+
+    # Build quick lookup of atoms that have an exocyclic double bond to O
+    # (i.e. ring carbons that are C=O). Accept both kekulized (bond order 2.0)
+    # and aromatic-ring representations — in aromatic γ-pyrones, the C4=O
+    # bond stays exocyclic regardless of how the pyrone ring is kekulized.
+    def _has_exocyclic_carbonyl(atom_idx: int) -> bool:
+        atom = mol.GetAtomWithIdx(atom_idx)
+        if atom.GetSymbol() != "C":
+            return False
+        for bond in atom.GetBonds():
+            other = bond.GetOtherAtom(atom)
+            if other.GetSymbol() != "O" or other.IsInRing():
+                continue
+            bo = bond.GetBondTypeAsDouble()
+            # Strict double bond (Kekulé): C=O
+            if bo == 2.0:
+                return True
+            # Aromatic bond to an oxygen with no hydrogens and no other bonds:
+            # this is the C=O of an aromatic γ-pyrone representation.
+            if (bo == 1.5 and other.GetTotalNumHs() == 0
+                and other.GetDegree() == 1):
+                return True
+        return False
+
+    # Identify γ-pyrone / α-pyrone rings: 6-ring with 1 ring-O and 1 ring-C(=O).
+    pyrone_rings: list[set[int]] = []
+    for ring in rings:
+        ring_os  = [i for i in ring if mol.GetAtomWithIdx(i).GetSymbol() == "O"]
+        ring_cos = [i for i in ring if _has_exocyclic_carbonyl(i)]
+        if len(ring_os) == 1 and len(ring_cos) >= 1:
+            pyrone_rings.append(ring)
+
+    if not pyrone_rings:
+        return set()
+
+    # Find rings fused to any pyrone (share ≥ 2 atoms) and collect all atoms.
+    system_atoms: set[int] = set()
+    for py in pyrone_rings:
+        system_atoms.update(py)
+        for other in rings:
+            if other is py:
+                continue
+            if len(py & other) >= 2:
+                system_atoms.update(other)
+    return system_atoms
 
 
 def _find_flavone_A_ring_phenols(mol: Chem.Mol) -> list[list[int]]:
     """Return list of [O_idx, C_idx] pairs for phenolic OHs attached to an
-    aromatic carbon of the A-ring (benzene) of a 4H-chromen-4-one system.
-    Matches baicalein (5,6,7), quercetin, apigenin, luteolin, chrysin, etc."""
-    chromone_atoms = _chromone_core_atoms(mol)
+    aromatic carbon of a ring fused to a γ-pyrone (chromone A-ring).
+    Matches baicalein (5,6,7), quercetin, apigenin, luteolin, chrysin,
+    wogonin, xanthones, coumarin-phenols, etc."""
+    chromone_atoms = _detect_chromone_system(mol)
     if not chromone_atoms:
         return []
-    phenol_patt = Chem.MolFromSmarts("[c;!$(c(=O))][OX2H1]")
-    if phenol_patt is None:
-        return []
+
     hits: list[list[int]] = []
-    for c_idx, o_idx in mol.GetSubstructMatches(phenol_patt):
-        # Require the aromatic C to belong to the chromone core (i.e. to the
-        # benzene ring fused to the γ-pyrone).
-        if c_idx in chromone_atoms:
-            hits.append([o_idx, c_idx])
+    for atom in mol.GetAtoms():
+        if atom.GetIdx() not in chromone_atoms:
+            continue
+        if atom.GetSymbol() != "C":
+            continue
+        if not atom.GetIsAromatic():
+            continue
+        # Skip ring carbonyls themselves.
+        if any(b.GetBondTypeAsDouble() == 2.0
+               and b.GetOtherAtom(atom).GetSymbol() == "O"
+               for b in atom.GetBonds()):
+            continue
+        # Look for an exocyclic -OH.
+        for bond in atom.GetBonds():
+            other = bond.GetOtherAtom(atom)
+            if (other.GetSymbol() == "O"
+                and other.GetTotalNumHs() >= 1
+                and other.GetDegree() == 1
+                and bond.GetBondTypeAsDouble() == 1.0):
+                hits.append([other.GetIdx(), atom.GetIdx()])
+                break
     return hits
 
 
@@ -653,8 +700,12 @@ def find_ionizable_sites(mol: Chem.Mol) -> list[dict]:
 
     # ── Pass 1: flavonoid A-ring phenols (highest priority — claim first). ──
     # These must be recognized before the generic 'phenol' rule so their
-    # lowered pKa (~7.0) is used instead of the generic ~10.0.
-    for atoms in _find_flavone_A_ring_phenols(mol):
+    # lowered pKa (~6.5) is used instead of the generic ~10.0.
+    flavone_hits = _find_flavone_A_ring_phenols(mol)
+    if flavone_hits:
+        print(f"    🌸  Detected {len(flavone_hits)} flavonoid A-ring phenol(s) "
+              f"→ using chromone-adjusted pKa=6.5")
+    for atoms in flavone_hits:
         k = frozenset(atoms)
         if k in seen_k:
             continue
@@ -1053,6 +1104,82 @@ def score_microstate_full(
     return total, cp, bd_full, borderline
 
 
+def _manual_deprotonate_site(smiles: str, site: dict) -> str | None:
+    """Return a SMILES with the given ionizable site deprotonated (acid) or
+    protonated (base). Used to supplement Dimorphite-DL when its internal
+    pKa table doesn't cover a site we care about (e.g. flavone A-ring OHs).
+
+    Returns None on any failure; the caller should treat this as a no-op."""
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+    rw = Chem.RWMol(mol)
+    target_idx = None
+    for idx in site["atom_indices"]:
+        if idx >= rw.GetNumAtoms():
+            continue
+        atom = rw.GetAtomWithIdx(idx)
+        sym, nh = atom.GetSymbol(), atom.GetTotalNumHs()
+        if site["site_type"] == "acid":
+            if sym in ("O", "S") and nh >= 1:
+                target_idx = idx
+                break
+            if sym == "N" and nh >= 1 and target_idx is None:
+                target_idx = idx
+        else:  # base
+            if sym == "N" and atom.GetFormalCharge() == 0:
+                target_idx = idx
+                break
+    if target_idx is None:
+        return None
+    atom = rw.GetAtomWithIdx(target_idx)
+    try:
+        if site["site_type"] == "acid":
+            atom.SetFormalCharge(-1)
+            # Let RDKit recompute implicit Hs after sanitize; set explicit to 0.
+            atom.SetNumExplicitHs(0)
+            atom.SetNoImplicit(False)
+        else:
+            atom.SetFormalCharge(+1)
+            atom.SetNumExplicitHs(atom.GetTotalNumHs() + 1)
+            atom.SetNoImplicit(False)
+        new_mol = rw.GetMol()
+        Chem.SanitizeMol(new_mol)
+        return Chem.MolToSmiles(new_mol, isomericSmiles=True, canonical=True)
+    except Exception:
+        return None
+
+
+def _supplement_dimorphite(
+    tautomer_smiles: str,
+    dimorphite_results: list[str],
+    ion_sites: list[dict],
+    target_ph: float,
+) -> list[str]:
+    """Add manually-deprotonated microstates for any ionizable site whose
+    pKa favors deprotonation at the target pH, if Dimorphite-DL didn't
+    already emit them. This is the safety net for flavone / chromone
+    phenols whose acidified pKa (~6.5) Dimorphite's internal rules may miss.
+    """
+    supplemented = list(dimorphite_results)
+    existing = set(dimorphite_results)
+
+    for site in ion_sites:
+        pka = site.get("heuristic_pka", 10.0)
+        stype = site.get("site_type", "acid")
+        # For an acid: supplement if pH is within or above its useful range.
+        # For a base: supplement if pH is within or below its useful range.
+        if stype == "acid" and (target_ph - pka) < -1.5:
+            continue
+        if stype == "base" and (pka - target_ph) < -1.5:
+            continue
+        new_smi = _manual_deprotonate_site(tautomer_smiles, site)
+        if new_smi and new_smi not in existing:
+            supplemented.append(new_smi)
+            existing.add(new_smi)
+    return supplemented
+
+
 def generate_ranked_microstates(
     base_smiles:    str,
     target_ph:      float = 7.4,
@@ -1090,7 +1217,16 @@ def generate_ranked_microstates(
     ph_hi = min(14.0, target_ph + ph_window / 2)
 
     for ti, taut in enumerate(kept, 1):
-        for pi, psmi in enumerate(dimorphite_enumerate(taut["smiles"], ph_lo, ph_hi), 1):
+        # Enumerate via Dimorphite, then supplement with manually-built
+        # microstates for sites Dimorphite may not know about (e.g. flavone
+        # A-ring OHs with pKa ~6.5).
+        raw_microstates = dimorphite_enumerate(taut["smiles"], ph_lo, ph_hi)
+        microstates = _supplement_dimorphite(
+            taut["smiles"], raw_microstates, ion_sites, target_ph)
+        if len(microstates) > len(raw_microstates):
+            print(f"   🧪  Supplemented {len(microstates) - len(raw_microstates)} "
+                  f"microstate(s) for under-covered ionizable sites.")
+        for pi, psmi in enumerate(microstates, 1):
             if psmi in seen_smi:
                 continue
             seen_smi.add(psmi)
