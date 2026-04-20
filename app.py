@@ -70,7 +70,7 @@ def pdb_to_canonical_smiles(pdb_bytes: bytes):
         return None, f"Error: {e}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sidebar  (mirrors notebook input configuration, lines 23-35)
+# Sidebar
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.sidebar.header("⚙️ Input / Options")
@@ -170,7 +170,7 @@ def create_3dmol_viewer(sdf_content: str, width: int, height: int) -> str:
     </script>"""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helper: microstate table  (mirrors notebook DISPLAY_COLS / visualize_microstate_rank)
+# Helper: microstate table
 # ─────────────────────────────────────────────────────────────────────────────
 
 def show_microstate_table(top_microstates: list) -> None:
@@ -184,13 +184,12 @@ def show_microstate_table(top_microstates: list) -> None:
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helper: display one ligand result  (mirrors notebook lines 1280-1355)
+# Helper: display one ligand result
 # ─────────────────────────────────────────────────────────────────────────────
 
 def display_ligand_result(r: dict, idx: int = 0) -> None:
     t = (r["top_microstates"] or [{}])[0]
 
-    # ── Rank-1 summary (mirrors notebook print block lines 1285-1297) ────────
     st.subheader("🏆 Rank-1 Microstate")
     col1, col2 = st.columns(2)
     with col1:
@@ -199,6 +198,7 @@ def display_ligand_result(r: dict, idx: int = 0) -> None:
         st.markdown(f"**Charge @ pH {target_pH}:** `{r['formal_charge']:+d}`")
         st.markdown(f"**Charged atoms:** `{r['charged_atoms']}`")
         st.markdown(f"**Zwitterion (strict):** `{'YES 🧷' if r['is_zwitterion'] else 'NO'}`")
+        st.markdown(f"**Aromaticity:** `{'LOST ⚠️' if r.get('flag_aromaticity_lost') else 'OK ✅'}`")
     with col2:
         st.markdown(f"**pKa source:** `{r['pKa_source']}`")
         st.markdown(f"**Backend:** `{r['decision_backend']}` ({r['decision_mode']})")
@@ -212,7 +212,7 @@ def display_ligand_result(r: dict, idx: int = 0) -> None:
         st.markdown(f"**Imidic acid:** `{'YES ⚠️' if r['flag_imidic_acid_penalty'] else 'NO'}`")
         st.markdown(f"**[N⁻]C=O:** `{'YES ⚠️' if r['flag_amide_n_deprotonation'] else 'NO'}`")
 
-    # ── Flags ─────────────────────────────────────────────────────────────────
+    # Flags row
     flag_col1, flag_col2, flag_col3 = st.columns(3)
     with flag_col1:
         if r["ambiguous_top_assignment"]:
@@ -232,7 +232,7 @@ def display_ligand_result(r: dict, idx: int = 0) -> None:
             st.success("✅ pH well away from pKa")
         st.caption(f"{r.get('n_all_microstates', 0)} microstates evaluated")
 
-    # ── Microstate table ──────────────────────────────────────────────────────
+    # Microstate table
     top_microstates = r.get("top_microstates", [])
     if top_microstates:
         with st.expander(f"📊 Ranked microstate table (top {len(top_microstates)})", expanded=True):
@@ -247,12 +247,11 @@ def display_ligand_result(r: dict, idx: int = 0) -> None:
                 key=f"dl_csv_{idx}",
             )
 
-    # ── 2D / 3D visualization  (mirrors notebook visualize_microstate_rank) ──
+    # 2D / 3D visualization
     if show_2d or show_3d:
         st.subheader("🎨 Structure Visualization")
         alt3d = r.get("alt3d", [])
 
-        # Tabs for top-k 3D if more than one structure was written
         if show_3d and len(alt3d) > 1:
             tabs = st.tabs([f"Rank {d['rank']}" for d in alt3d])
             for tab, d in zip(tabs, alt3d):
@@ -279,7 +278,6 @@ def display_ligand_result(r: dict, idx: int = 0) -> None:
                                 st.warning(f"3D view failed: {e}")
                         st.caption(f"`{d['smiles']}`")
         else:
-            # Single structure
             viz_l, viz_r = st.columns(2) if (show_2d and show_3d) else (None, None)
             sdf_p = r.get("minimized_sdf")
 
@@ -308,7 +306,7 @@ def display_ligand_result(r: dict, idx: int = 0) -> None:
                     else:
                         st.warning("SDF file not found")
 
-    # ── Output files ──────────────────────────────────────────────────────────
+    # Output files
     with st.expander("📁 Output files"):
         for label, key in [("PDB (rank-1)", "minimized_pdb"),
                             ("MOL2 (rank-1)", "minimized_mol2"),
@@ -340,7 +338,6 @@ if run_btn:
                 with tempfile.TemporaryDirectory() as tmp:
                     tmp = Path(tmp)
 
-                    # Determine effective input
                     if input_type == "FILE" and converted_smiles_from_pdb:
                         eff_type   = "SMILES"
                         eff_smiles = converted_smiles_from_pdb
@@ -380,10 +377,13 @@ if run_btn:
                         write_alt_3d_for_top_k  = write_alt_3d_for_top_k,
                     )
 
-                    backend_display = out['pka_backend'] if out['pka_backend'] != "fine" else "heuristic (SMARTS table)"
+                    # FIX: was checking != "fine" which never matched; "none" is the
+                    # correct sentinel when no ML backend is available.
+                    backend_display = (out['pka_backend']
+                                       if out['pka_backend'] != "none"
+                                       else "heuristic (SMARTS table)")
                     st.success(f"✅ Analysis complete!  |  pKa backend: `{backend_display}`")
 
-                    # Warnings
                     if out.get("format_warnings"):
                         with st.expander("⚠️ Warnings", expanded=False):
                             for w in out["format_warnings"]:
@@ -392,11 +392,9 @@ if run_btn:
                                 else:
                                     st.warning(w)
 
-                    # Summary
                     with st.expander("📊 Summary", expanded=True):
                         st.text(out["summary_text"])
 
-                    # Per-ligand results
                     st.header("📈 Results")
                     results = out["results"]
                     if len(results) > 1:
@@ -407,7 +405,6 @@ if run_btn:
                     else:
                         display_ligand_result(results[0], idx=0)
 
-                    # Downloads
                     st.header("💾 Downloads")
                     out_dir_path = Path(out["out_dir"])
 
@@ -480,7 +477,7 @@ st.sidebar.markdown("""
 
 st.sidebar.markdown("### 💡 Examples")
 st.sidebar.markdown("""
-**Acylhydrazone** (amide NH preserved):
+**Acylhydrazone** (amide NH preserved, charge 0):
 ```
 O=C(N/N=C/CC)C1=NC(C(N/N=C/CC)=O)=CC=C1
 ```
@@ -488,9 +485,21 @@ O=C(N/N=C/CC)C1=NC(C(N/N=C/CC)=O)=CC=C1
 ```
 NCC(=O)O
 ```
-**Ibuprofen:**
+**Apigenin** (7-OH deprotonated, charge −1):
 ```
-CC(C)CC1=CC=C(C=C1)C(C)C(=O)O
+O=c1cc(-c2ccc(O)cc2)oc2cc(O)cc(O)c12
+```
+**Baicalein** (7-OH deprotonated, charge −1):
+```
+O=c1cc(-c2ccccc2)oc2cc(O)c(O)c(O)c12
+```
+**Osimertinib** (dimethylaminoalkyl, charge +1):
+```
+COc1cc2c(cc1NC(=O)/C=C/CN(C)C)ncnc2Nc1ccc(F)c(Cl)c1
+```
+**Kaempferol** (3-OH flavonol, 7-OH deprotonated, charge −1):
+```
+O=c1c(O)c(-c2ccc(O)cc2)oc2cc(O)cc(O)c12
 ```
 """)
 
