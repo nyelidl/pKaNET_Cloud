@@ -485,22 +485,7 @@ O=C(N/N=C/CC)C1=NC(C(N/N=C/CC)=O)=CC=C1
 ```
 NCC(=O)O
 ```
-**Apigenin** (7-OH deprotonated, charge −1):
-```
-O=c1cc(-c2ccc(O)cc2)oc2cc(O)cc(O)c12
-```
-**Baicalein** (7-OH deprotonated, charge −1):
-```
-O=c1cc(-c2ccccc2)oc2cc(O)c(O)c(O)c12
-```
-**Osimertinib** (dimethylaminoalkyl, charge +1):
-```
-COc1cc2c(cc1NC(=O)/C=C/CN(C)C)ncnc2Nc1ccc(F)c(Cl)c1
-```
-**Kaempferol** (3-OH flavonol, 7-OH deprotonated, charge −1):
-```
-O=c1c(O)c(-c2ccc(O)cc2)oc2cc(O)cc(O)c12
-```
+
 """)
 
 st.markdown("---")
