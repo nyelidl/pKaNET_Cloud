@@ -659,38 +659,138 @@ def _detect_chromone_system(mol: Chem.Mol) -> set[int]:
     return system_atoms
 
 
-def _find_flavone_A_ring_phenols(mol: Chem.Mol) -> list[list[int]]:
-    """Return list of [O_idx, C_idx] pairs for phenolic OHs attached to an
-    aromatic carbon of a ring fused to a γ-pyrone (chromone A-ring).
-    Matches baicalein (5,6,7), quercetin, apigenin, luteolin, chrysin,
-    wogonin, xanthones, coumarin-phenols, etc."""
+def _find_flavone_A_ring_phenols(mol: Chem.Mol) -> list[dict]:
+    """Return a list of site dicts (one per phenolic OH on the A-ring of a
+    chromone/flavone/isoflavone/xanthone) with position-aware pKa assignments.
+
+    Baicalein illustrates why we cannot use a flat pKa for all flavone OHs:
+      - 5-OH  : intramolecular H-bond to C4 carbonyl → pKa ≈ 10–11
+                (chelated, almost never deprotonates at physiological pH)
+      - 6-OH  : meta to both ring junction + C4=O, ortho to two other OHs
+                (pyrogallol triol) → most acidic, pKa ≈ 6.3–6.5
+      - 7-OH  : para to ring-O (O1), activated by chromone conjugation
+                → pKa ≈ 7.5–8.0
+      - 8-OH  : adjacent to ring-O fusion → pKa ≈ 8–9
+      - 3-OH  : (flavonols only, on C-ring) pKa ≈ 9–10
+
+    Classification by neighborhood:
+      * "chelated" — carbon ortho to the ring-C=O  (5-OH in baicalein)
+      * "pyrogallol_middle" — carbon with OHs on BOTH ortho carbons
+      * "catechol_pair" — carbon with OH on exactly ONE ortho carbon
+      * "isolated" — no ortho OH
+      * "ortho_fusion_O" — ortho to the γ-pyrone ring oxygen (8-OH pattern)
+
+    Each classification maps to a carefully tuned pKa.
+    """
     chromone_atoms = _detect_chromone_system(mol)
     if not chromone_atoms:
         return []
 
-    hits: list[list[int]] = []
-    for atom in mol.GetAtoms():
-        if atom.GetIdx() not in chromone_atoms:
-            continue
-        if atom.GetSymbol() != "C":
-            continue
-        if not atom.GetIsAromatic():
-            continue
-        # Skip ring carbonyls themselves.
-        if any(b.GetBondTypeAsDouble() == 2.0
-               and b.GetOtherAtom(atom).GetSymbol() == "O"
-               for b in atom.GetBonds()):
-            continue
-        # Look for an exocyclic -OH.
+    # First find the ring-C=O (C4 of the chromone) and ring-O (O1).
+    ring_carbonyl_idx: int | None = None
+    ring_oxygen_idx:   int | None = None
+    for idx in chromone_atoms:
+        atom = mol.GetAtomWithIdx(idx)
+        if atom.GetSymbol() == "C":
+            for bond in atom.GetBonds():
+                other = bond.GetOtherAtom(atom)
+                if (other.GetSymbol() == "O"
+                    and not other.IsInRing()
+                    and bond.GetBondTypeAsDouble() in (2.0, 1.5)
+                    and other.GetTotalNumHs() == 0
+                    and other.GetDegree() == 1):
+                    ring_carbonyl_idx = idx
+                    break
+        elif atom.GetSymbol() == "O" and atom.IsInRing():
+            ring_oxygen_idx = idx
+
+    def _neighbors_in_chromone(idx: int) -> list[int]:
+        return [n.GetIdx() for n in mol.GetAtomWithIdx(idx).GetNeighbors()
+                if n.GetIdx() in chromone_atoms]
+
+    def _has_phenolic_OH(c_idx: int) -> bool:
+        atom = mol.GetAtomWithIdx(c_idx)
         for bond in atom.GetBonds():
             other = bond.GetOtherAtom(atom)
             if (other.GetSymbol() == "O"
                 and other.GetTotalNumHs() >= 1
                 and other.GetDegree() == 1
-                and bond.GetBondTypeAsDouble() == 1.0):
-                hits.append([other.GetIdx(), atom.GetIdx()])
+                and bond.GetBondTypeAsDouble() == 1.0
+                and not other.IsInRing()):
+                return True
+        return False
+
+    # Collect candidate (c_idx, o_idx) pairs on the fused benzene.
+    candidates: list[tuple[int, int]] = []
+    for atom in mol.GetAtoms():
+        c_idx = atom.GetIdx()
+        if c_idx not in chromone_atoms:
+            continue
+        if atom.GetSymbol() != "C" or not atom.GetIsAromatic():
+            continue
+        # Skip the ring carbonyl itself.
+        if c_idx == ring_carbonyl_idx:
+            continue
+        # Find the attached OH.
+        for bond in atom.GetBonds():
+            other = bond.GetOtherAtom(atom)
+            if (other.GetSymbol() == "O"
+                and other.GetTotalNumHs() >= 1
+                and other.GetDegree() == 1
+                and bond.GetBondTypeAsDouble() == 1.0
+                and not other.IsInRing()):
+                candidates.append((c_idx, other.GetIdx()))
                 break
-    return hits
+
+    # Classify each candidate and assign position-aware pKa.
+    sites: list[dict] = []
+    for c_idx, o_idx in candidates:
+        chromone_nbrs = _neighbors_in_chromone(c_idx)
+
+        # Ortho carbons within the chromone system (A-ring).
+        ortho_carbons = [n for n in chromone_nbrs
+                         if mol.GetAtomWithIdx(n).GetSymbol() == "C"]
+
+        # Is this C ortho to the ring carbonyl (C4=O)? If yes → 5-OH-like.
+        ortho_to_carbonyl = (ring_carbonyl_idx is not None
+                             and ring_carbonyl_idx in chromone_nbrs)
+
+        # Is this C ortho to the ring oxygen (O1)? If yes → 8-OH-like.
+        ortho_to_ring_O = (ring_oxygen_idx is not None
+                           and ring_oxygen_idx in chromone_nbrs)
+
+        # How many of the ortho carbons also carry a phenolic OH?
+        n_ortho_phenols = sum(1 for n in ortho_carbons if _has_phenolic_OH(n))
+
+        # ── Classification & pKa assignment ─────────────────────────────────
+        if ortho_to_carbonyl:
+            # 5-OH in baicalein — locked by intramolecular H-bond to C4=O.
+            label, pka = "flavone_5OH_chelated", 11.0
+        elif ortho_to_ring_O:
+            # 8-OH-like — ortho to pyran oxygen.
+            label, pka = "flavone_8OH_ortho_pyranO", 8.5
+        elif n_ortho_phenols >= 2:
+            # Middle OH of a pyrogallol triol (baicalein 6-OH, gallic-acid-like).
+            label, pka = "flavone_6OH_pyrogallol_center", 6.3
+        elif n_ortho_phenols == 1:
+            # Catechol pair member (quercetin 3',4', or flavone 6- or 7- of a diol).
+            label, pka = "flavone_phenol_catechol_pair", 7.8
+        else:
+            # Isolated phenol on the A-ring — activated by chromone but not
+            # by any ortho effect. Baicalein 7-OH falls in this bucket if
+            # the 8-OH is absent (which it is in baicalein — 7-OH has only
+            # 6-OH as an ortho phenol, so we end up in the "catechol_pair"
+            # bucket above; this branch captures e.g. chrysin 7-OH).
+            label, pka = "flavone_phenol_isolated", 8.0
+
+        sites.append({
+            "label": label,
+            "atom_indices": [o_idx, c_idx],
+            "heuristic_pka": pka,
+            "site_type": "acid",
+        })
+
+    return sites
 
 
 def find_ionizable_sites(mol: Chem.Mol) -> list[dict]:
@@ -699,22 +799,21 @@ def find_ionizable_sites(mol: Chem.Mol) -> list[dict]:
     claimed_atoms: set[int] = set()   # atoms owned by higher-priority passes
 
     # ── Pass 1: flavonoid A-ring phenols (highest priority — claim first). ──
-    # These must be recognized before the generic 'phenol' rule so their
-    # lowered pKa (~6.5) is used instead of the generic ~10.0.
+    # These are position-classified (5-OH chelated, 6-OH pyrogallol center,
+    # 8-OH ortho-pyranO, etc.) and assigned environment-specific pKa values
+    # before the generic 'phenol' rule (pKa 10) claims them.
     flavone_hits = _find_flavone_A_ring_phenols(mol)
     if flavone_hits:
-        print(f"    🌸  Detected {len(flavone_hits)} flavonoid A-ring phenol(s) "
-              f"→ using chromone-adjusted pKa=6.5")
-    for atoms in flavone_hits:
-        k = frozenset(atoms)
+        detail = ", ".join(f"{s['label'].replace('flavone_','')}(pKa={s['heuristic_pka']})"
+                           for s in flavone_hits)
+        print(f"    🌸  Detected {len(flavone_hits)} flavonoid A-ring phenol(s): {detail}")
+    for site in flavone_hits:
+        k = frozenset(site["atom_indices"])
         if k in seen_k:
             continue
         seen_k.add(k)
-        claimed_atoms.update(atoms)
-        sites.append(dict(label="flavone_A_ring_phenol",
-                           atom_indices=atoms,
-                           heuristic_pka=6.5,
-                           site_type="acid"))
+        claimed_atoms.update(site["atom_indices"])
+        sites.append(site)
 
     # ── Pass 2: SMARTS-driven generic site list. ────────────────────────────
     for lbl, pat, pka_v, stype in _IONIZABLE_SITES_COMPILED:
