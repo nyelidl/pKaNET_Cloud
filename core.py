@@ -1068,7 +1068,13 @@ def _best_pka_for_site(site: dict, ml_predictions: list[dict], pubchem_result: d
     if pubchem_result.get("available") and pubchem_result.get("confidence") in ("high", "medium"):
         vals = pubchem_result.get("pka_values", [])
         if vals:
-            return min(vals, key=lambda v: abs(v - site["heuristic_pka"])), "pubchem"
+            best = min(vals, key=lambda v: abs(v - site["heuristic_pka"]))
+            # Guard: skip pubchem pKa if it differs from heuristic by > 3 pKa units.
+            # This prevents base-site pKa values (e.g. benzimidazolium pKa≈5.5)
+            # from being assigned to the wrong ionisation event (N-H acid pKa≈12.3),
+            # which would incorrectly score the deprotonated form as dominant at pH 7.4.
+            if abs(best - site["heuristic_pka"]) <= 3.0:
+                return best, "pubchem"
     return site["heuristic_pka"], "heuristic"
 
 
