@@ -560,13 +560,13 @@ def hh_ph_match_score(pka: float, ph: float, site_type: str, actual_charge: int)
 
 _IONIZABLE_SITE_DEF = [
     ("sulfonic_acid",      "[SX4](=O)(=O)[OX2H1]",                              1.0,  "acid"),
-    ("phosphate_diester", "[PX4](=O)([OX2H1])([OX2,OX1-])[OX2,OX1-]",             2.1, "acid"),
-    ("phosphonate",       "[PX4](=O)([OX2H1])[OX2H1]",                          2.1, "acid"),
+    # phosphonate / phosphate_diester removed — handled by Pass 0 diprotic handler below
     ("carboxylic_acid",    "[CX3](=O)[OX2H1]",                                  4.5,  "acid"),
     ("tetrazole",          "c1nn[nH]n1",                                         4.9,  "acid"),
-    ("imidazole",          "c1cn[nH]c1",                                         6.0,  "acid"),
-    ("benzimidazole",      "c1ccc2[nH]cnc2c1",                                  5.5,  "acid"),
-    ("phosphonate",        "[PX4](=O)([OX2H1])[OX2H1,OX1-]",                   6.5,  "acid"),
+    # imidazole/pyrazole NH pKa=14.2 (N-H acid, NOT base pKa) → neutral at pH 7.4
+    ("imidazole",          "c1cn[nH]c1",                                        14.2,  "acid"),
+    # benzimidazole NH pKa=12.3 (N-H acid, NOT conjugate-base pKa=5.5) → neutral at pH 7.4
+    ("benzimidazole",      "c1ccc2[nH]cnc2c1",                                 12.3,  "acid"),
     ("sulfonamide_NH",     "[SX4](=O)(=O)[NX3;H1]",                            10.1,  "acid"),
     ("imide_NH",           "[CX3](=O)[NX3;H1][CX3]=O",                          9.6,  "acid"),
     ("acylhydrazone_NH",   "[CX3](=O)[NX3;H1][NX2]=[CX3]",                    10.5,  "acid"),
@@ -798,10 +798,51 @@ def _find_flavone_A_ring_phenols(mol: Chem.Mol) -> list[dict]:
     return sites
 
 
+# ── Phosphorus acid handler for Pass 0 ──────────────────────────────────────
+# Matches any P=O with at least one OH neighbour.
+# For each P atom: first unclaimed OH → pKa1=2.1, second → pKa2=6.5.
+# Handles monoprotic (one OH) and diprotic (two OH) cases correctly.
+# Also handles bisphosphonates (two P atoms) and half-ionised P(OH)(O-) forms.
+_P_ACID_PAT = Chem.MolFromSmarts("[PX4](=O)([OX2H1])")   # any P-OH
+
+
 def find_ionizable_sites(mol: Chem.Mol) -> list[dict]:
     sites: list[dict] = []
     seen_ion: set[int] = set()       # dedup by ionizable atom idx
     claimed_atoms: set[int] = set()
+
+    # Pass 0: phosphorus acids — per-P-atom, assign pKa1 then pKa2 to OH neighbours
+    if _P_ACID_PAT is not None:
+        seen_p: set[int] = set()
+        for match in mol.GetSubstructMatches(_P_ACID_PAT):
+            # identify the P atom in this match
+            p_idx = next(
+                (idx for idx in match
+                 if mol.GetAtomWithIdx(idx).GetAtomicNum() == 15),
+                None,
+            )
+            if p_idx is None or p_idx in seen_p:
+                continue
+            seen_p.add(p_idx)
+            # collect all OH oxygens bonded to this P, in index order
+            p_oh = [
+                nb.GetIdx()
+                for nb in mol.GetAtomWithIdx(p_idx).GetNeighbors()
+                if nb.GetAtomicNum() == 8
+                and nb.GetTotalNumHs() > 0
+                and nb.GetIdx() not in seen_ion
+            ]
+            pka_vals = [2.1, 6.5]   # pKa1, pKa2
+            labels   = ["phosphonate_pka1", "phosphonate_pka2"]
+            for o_idx, pka, lbl in zip(p_oh, pka_vals, labels):
+                seen_ion.add(o_idx)
+                claimed_atoms.add(o_idx)
+                sites.append(dict(
+                    label=lbl,
+                    atom_indices=[o_idx],
+                    heuristic_pka=pka,
+                    site_type="acid",
+                ))
 
     # Pass 1: flavonoid A-ring phenols (highest priority)
     for site in _find_flavone_A_ring_phenols(mol):
