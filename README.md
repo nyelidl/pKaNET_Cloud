@@ -1,4 +1,4 @@
-# 🧪 pKaNET Cloud — Tautomer-Aware Protonation Engine
+# 🧪 pKaNET Cloud+ — Tautomer-Aware Protonation Engine
 ### *Heuristic microstate ranking · pH-adjusted SMILES · 3D structure generation · Google Colab & Streamlit*
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/16oz3jR6gWOzaSaJImlVflPkgT8eTcfTi?usp=sharing)
