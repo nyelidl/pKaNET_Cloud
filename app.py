@@ -2,6 +2,11 @@ import streamlit as st
 import tempfile
 import subprocess
 import shutil
+import io
+import re
+import contextlib
+import requests as _requests
+from urllib.parse import quote as _url_quote
 from pathlib import Path
 from core import (
     run_job, zip_all_outputs, zip_minimized_structures, DISPLAY_COLS, _PKA_BACKEND
@@ -43,6 +48,215 @@ st.markdown(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Name / SMILES resolution (port from Guest Preparation notebook)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _safe_name(name: str) -> str:
+    name = (name or "").strip() or "mol"
+    name = re.sub(r"\s+", "_", name)
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", name)
+    return name
+
+
+def _is_smiles(text: str) -> bool:
+    """Heuristic: does this string look like SMILES rather than a compound name?"""
+    text = text.strip().split()[0] if text.strip() else ""
+    if not text:
+        return False
+    smi_chars = set("CNOPSFIBrClcnopsb[]()=\\/#@+\\-0123456789%.")
+    ratio = sum(1 for c in text if c in smi_chars) / len(text)
+    if ratio > 0.70:
+        return True
+    with contextlib.redirect_stderr(io.StringIO()):
+        mol = Chem.MolFromSmiles(text, sanitize=False)
+    return mol is not None and mol.GetNumAtoms() > 0
+
+
+def pubchem_search(query: str) -> dict:
+    """
+    Search PubChem for a compound name / keyword.
+    Five-step cascade with error collection at every branch.
+    Returns dict with keys: found, cid, name, smiles, iupac_name, mw, mf, source, error.
+    """
+    _BASE    = "https://pubchem.ncbi.nlm.nih.gov/rest/pug"
+    _PROPS   = "IUPACName,MolecularFormula,MolecularWeight,IsomericSMILES,CanonicalSMILES"
+    _HDR     = {"User-Agent": "pKaNET-Cloud-Streamlit/1.0", "Accept": "application/json"}
+    _TIMEOUT = 20
+    errors   = []
+    q_enc    = _url_quote(query, safe="")
+
+    def _fetch(url):
+        return _requests.get(url, headers=_HDR, timeout=_TIMEOUT)
+
+    def _props_from_cid(cid):
+        r = _fetch(f"{_BASE}/compound/cid/{cid}/property/{_PROPS}/JSON")
+        r.raise_for_status()
+        return r.json()["PropertyTable"]["Properties"][0]
+
+    def _pack(props, source_label, matched_name):
+        smi = (props.get("IsomericSMILES") or
+               props.get("CanonicalSMILES") or
+               next((v for k, v in props.items()
+                     if "smiles" in k.lower() and v), None))
+        if not smi:
+            errors.append(f"_pack: no SMILES in props keys={list(props.keys())}")
+            return None
+        return dict(
+            found=True, cid=props.get("CID"), name=matched_name,
+            smiles=smi, iupac_name=props.get("IUPACName", ""),
+            mw=props.get("MolecularWeight", ""),
+            mf=props.get("MolecularFormula", ""),
+            source=source_label, error=None,
+        )
+
+    # Step 1: name → CIDs → props by CID
+    try:
+        r = _fetch(f"{_BASE}/compound/name/{q_enc}/cids/JSON")
+        if r.status_code == 200:
+            body = r.json()
+            if "IdentifierList" in body:
+                cid    = body["IdentifierList"]["CID"][0]
+                result = _pack(_props_from_cid(cid), "PubChem (name → CID)", query)
+                if result: return result
+            elif "Fault" in body:
+                errors.append(f"Step1 Fault: {body['Fault'].get('Message','')}")
+            else:
+                errors.append(f"Step1 unexpected keys: {list(body.keys())}")
+        else:
+            errors.append(f"Step1 HTTP {r.status_code}: {r.text[:120]}")
+    except Exception as e:
+        errors.append(f"Step1 exception: {type(e).__name__}: {e}")
+
+    # Step 2: name → property directly
+    try:
+        r = _fetch(f"{_BASE}/compound/name/{q_enc}/property/{_PROPS}/JSON")
+        if r.status_code == 200:
+            body = r.json()
+            if "PropertyTable" in body:
+                result = _pack(body["PropertyTable"]["Properties"][0],
+                               "PubChem (name → property)", query)
+                if result: return result
+            elif "Fault" in body:
+                errors.append(f"Step2 Fault: {body['Fault'].get('Message','')}")
+            else:
+                errors.append(f"Step2 unexpected keys: {list(body.keys())}")
+        else:
+            errors.append(f"Step2 HTTP {r.status_code}: {r.text[:80]}")
+    except Exception as e:
+        errors.append(f"Step2 exception: {type(e).__name__}: {e}")
+
+    # Step 3: autocomplete → top suggestion
+    try:
+        r = _fetch(
+            f"https://pubchem.ncbi.nlm.nih.gov/rest/autocomplete/"
+            f"compound/{q_enc}/JSON?limit=5"
+        )
+        if r.status_code == 200:
+            suggestions = r.json().get("dictionary_terms", {}).get("compound", [])
+            if not suggestions:
+                errors.append("Step3: autocomplete returned 0 suggestions")
+            for suggestion in suggestions:
+                try:
+                    r2 = _fetch(
+                        f"{_BASE}/compound/name/"
+                        f"{_url_quote(suggestion, safe='')}/cids/JSON"
+                    )
+                    if r2.status_code == 200:
+                        body2 = r2.json()
+                        if "IdentifierList" in body2:
+                            cid    = body2["IdentifierList"]["CID"][0]
+                            result = _pack(
+                                _props_from_cid(cid),
+                                f"PubChem (autocomplete → '{suggestion}')",
+                                suggestion,
+                            )
+                            if result: return result
+                except Exception as e2:
+                    errors.append(f"Step3 suggestion '{suggestion}': {e2}")
+                    continue
+        else:
+            errors.append(f"Step3 HTTP {r.status_code}: {r.text[:80]}")
+    except Exception as e:
+        errors.append(f"Step3 exception: {type(e).__name__}: {e}")
+
+    # Step 4: word search (fuzzy)
+    try:
+        r = _fetch(f"{_BASE}/compound/name/{q_enc}/property/{_PROPS}/JSON?name_type=word")
+        if r.status_code == 200:
+            body = r.json()
+            if "PropertyTable" in body:
+                result = _pack(body["PropertyTable"]["Properties"][0],
+                               "PubChem (word search)", query)
+                if result: return result
+            elif "Fault" in body:
+                errors.append(f"Step4 Fault: {body['Fault'].get('Message','')}")
+            else:
+                errors.append(f"Step4 unexpected keys: {list(body.keys())}")
+        else:
+            errors.append(f"Step4 HTTP {r.status_code}: {r.text[:80]}")
+    except Exception as e:
+        errors.append(f"Step4 exception: {type(e).__name__}: {e}")
+
+    # Step 5: full compound JSON fallback
+    try:
+        r = _fetch(f"{_BASE}/compound/name/{q_enc}/JSON")
+        if r.status_code == 200:
+            body = r.json()
+            pc   = body.get("PC_Compounds", [{}])[0]
+            cid  = pc.get("id", {}).get("id", {}).get("cid")
+            smi  = None
+            for prop in pc.get("props", []):
+                if prop.get("urn", {}).get("label") == "SMILES":
+                    smi = prop.get("value", {}).get("sval") or smi
+            if smi and cid:
+                return dict(found=True, cid=cid, name=query, smiles=smi,
+                            iupac_name="", mw="", mf="",
+                            source="PubChem (full compound JSON)", error=None)
+            else:
+                errors.append(f"Step5: CID={cid}, SMILES found={smi is not None}")
+        else:
+            errors.append(f"Step5 HTTP {r.status_code}")
+    except Exception as e:
+        errors.append(f"Step5 exception: {type(e).__name__}: {e}")
+
+    err_detail = " | ".join(errors) if errors else "No error details (all silent)"
+    return dict(
+        found=False, cid=None, name=query, smiles="",
+        iupac_name="", mw="", mf="", source=None,
+        error=f"Not found on PubChem: '{query}' — {err_detail}",
+    )
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def cached_pubchem_search(query: str) -> dict:
+    """Wrapper with Streamlit cache to avoid repeat lookups on every rerun."""
+    return pubchem_search(query)
+
+
+def resolve_text_input(raw: str, fallback_name: str = "ligand") -> tuple:
+    """
+    Resolve a text input to (smiles, name, pubchem_info_or_None).
+    Accepts either a SMILES string (optionally `SMILES name`) or a compound name.
+    Returns (None, None, None) on empty input.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None, None, None
+    parts = raw.split(None, 1)
+    token = parts[0]
+    rest  = parts[1].strip() if len(parts) > 1 else ""
+    if _is_smiles(token):
+        name = _safe_name(rest) if rest else fallback_name
+        return token, name, None
+    # Treat as compound name → PubChem lookup
+    pc = cached_pubchem_search(raw)
+    if not pc["found"]:
+        return None, None, pc
+    name = _safe_name(pc["name"]) or fallback_name
+    return pc["smiles"], name, pc
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PDB → SMILES conversion
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -74,7 +288,7 @@ def pdb_to_canonical_smiles(pdb_bytes: bytes):
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.sidebar.header("⚙️ Input / Options")
-input_type  = st.sidebar.selectbox("Input type", ["SMILES", "SMI_FILE", "FILE"])
+input_type  = st.sidebar.selectbox("Input type", ["text", "SMI_FILE", "FILE"])
 target_pH   = st.sidebar.slider("Target pH", 2.0, 12.0, 7.4, 0.1)
 output_name = st.sidebar.text_input("Output name", value="ligand")
 
@@ -121,12 +335,69 @@ viewer_height = st.sidebar.slider("3D Viewer Height", 200, 600, 360, 20)
 smiles_text = None
 uploaded    = None
 
-if input_type == "SMILES":
-    smiles_text = st.text_area(
-        "SMILES   example: CC(=O)OC1=CC=CC=C1C(=O)O",
+# These are populated when the user enters a compound name resolved via PubChem.
+resolved_smiles_from_name = None
+resolved_pubchem_info     = None
+resolved_name_for_output  = None
+
+if input_type == "text":
+    text_in = st.text_area(
+        "SMILES or compound name   examples: `aspirin`, `baicalein`, "
+        "`CC(=O)OC1=CC=CC=C1C(=O)O`",
         value="CC(=O)OC1=CC=CC=C1C(=O)O",
         height=100,
+        help=(
+            "Paste a SMILES string (used directly) or type a compound name "
+            "(looked up on PubChem). You can also write `SMILES name` to set "
+            "a custom output name."
+        ),
     )
+    if text_in and text_in.strip():
+        token = text_in.strip().split()[0]
+        if _is_smiles(token):
+            # SMILES path — pass through to run_job as-is
+            smiles_text = text_in
+        else:
+            # Compound name path — resolve via PubChem
+            with st.spinner(f"🔍 Looking up '{text_in.strip()}' on PubChem…"):
+                resolved_smiles_from_name, resolved_name_for_output, resolved_pubchem_info = \
+                    resolve_text_input(text_in, fallback_name=output_name or "ligand")
+            if resolved_smiles_from_name:
+                pc = resolved_pubchem_info
+                st.success(f"✅ {pc['source']}")
+                colA, colB = st.columns([2, 3])
+                with colA:
+                    st.markdown(
+                        f"- **CID:** [{pc['cid']}](https://pubchem.ncbi.nlm.nih.gov/compound/{pc['cid']})\n"
+                        f"- **IUPAC:** {pc['iupac_name'] or '—'}\n"
+                        f"- **Formula:** {pc['mf'] or '—'}\n"
+                        f"- **MW:** {pc['mw'] or '—'}"
+                    )
+                    st.code(pc["smiles"], language="text")
+                with colB:
+                    if DRAW_AVAILABLE:
+                        mol_pc = Chem.MolFromSmiles(pc["smiles"])
+                        if mol_pc:
+                            AllChem.Compute2DCoords(mol_pc)
+                            img_pc = Draw.MolToImage(mol_pc, size=(360, 260))
+                            if img_pc:
+                                st.image(img_pc, caption="2D preview (from PubChem SMILES)")
+                # Feed the resolved SMILES to run_job
+                smiles_text = pc["smiles"]
+            else:
+                # Lookup failed — show the diagnostic message
+                err_msg = (
+                    resolved_pubchem_info.get("error")
+                    if resolved_pubchem_info
+                    else f"Not found on PubChem: '{text_in.strip()}'"
+                )
+                st.error(f"❌ PubChem lookup failed.\n\n{err_msg}")
+                st.info(
+                    "💡 Possible fixes:\n"
+                    "- Check spelling (e.g. `baicalein`, `quercetin`, `aspirin`)\n"
+                    "- Paste a SMILES string directly\n"
+                    "- Check your internet connection"
+                )
 elif input_type == "SMI_FILE":
     uploaded = st.file_uploader("Upload .smi file (SMILES [name] per line)", type=["smi", "txt"])
     st.info("📝 Format: `SMILES [optional_name]` per line")
@@ -322,8 +593,8 @@ def display_ligand_result(r: dict, idx: int = 0) -> None:
 run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
 
 if run_btn:
-    if   input_type == "SMILES"   and not smiles_text:
-        st.error("⚠️ Please enter a SMILES string")
+    if   input_type == "text"     and not smiles_text:
+        st.error("⚠️ Please enter a SMILES string or a compound name (PubChem must resolve a name before running)")
     elif input_type == "SMI_FILE" and not uploaded:
         st.error("⚠️ Please upload a .smi file")
     elif input_type == "FILE"     and not uploaded:
@@ -349,11 +620,18 @@ if run_btn:
                         eff_smiles = None
                         eff_bytes  = uploaded.read()
                         eff_name   = uploaded.name
-                    elif input_type == "SMILES":
+                    elif input_type == "text":
+                        # smiles_text is either a raw SMILES string (user typed SMILES)
+                        # or a PubChem-resolved SMILES (user typed a compound name).
                         eff_type   = "SMILES"
                         eff_smiles = smiles_text
                         eff_bytes  = None
                         eff_name   = None
+                        if resolved_pubchem_info and resolved_pubchem_info.get("found"):
+                            st.info(
+                                f"🔄 Using PubChem-resolved SMILES "
+                                f"(CID {resolved_pubchem_info['cid']}): `{smiles_text}`"
+                            )
                     else:
                         eff_type   = "SMI_FILE"
                         eff_smiles = None
@@ -477,6 +755,12 @@ st.sidebar.markdown("""
 
 st.sidebar.markdown("### 💡 Examples")
 st.sidebar.markdown("""
+**By compound name** (PubChem auto-lookup):
+```
+aspirin
+baicalein
+quercetin
+```
 **Acylhydrazone** (amide NH preserved, charge 0):
 ```
 O=C(N/N=C/CC)C1=NC(C(N/N=C/CC)=O)=CC=C1
