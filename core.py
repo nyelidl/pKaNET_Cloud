@@ -413,7 +413,7 @@ _IONIZABLE_SITE_DEF = [
     # Oxazol-2-yl
     ("sulfonamide_oxazole_NH",     "[SX4](=O)(=O)[NX3;H1]c1ncco1",                       6.5, "acid"),
     # 6-membered electron-poor heteroaromatic (pyrimidine, pyrazine, pyridazine)
-    ("sulfonamide_pyrim2_NH",      "[SX4](=O)(=O)[NX3;H1]c1ncccn1",                     6.5,  "acid"),  # 2-aminopyrimidine
+    ("sulfonamide_pyrim2_NH",      "[SX4](=O)(=O)[NX3;H1]c1ncccn1",                     7.0,  "acid"),  # 2-aminopyrimidine
     ("sulfonamide_pyrim4_NH",      "[SX4](=O)(=O)[NX3;H1]c1ccncn1",                     6.5,  "acid"),  # 4-aminopyrimidine
     ("sulfonamide_pyrim5_NH",      "[SX4](=O)(=O)[NX3;H1]c1cncnc1",                     6.5,  "acid"),  # 5-aminopyrimidine
     ("sulfonamide_pyrazin_NH",     "[SX4](=O)(=O)[NX3;H1]c1cnccn1",                     7.0,  "acid"),  # aminopyrazine
@@ -422,7 +422,7 @@ _IONIZABLE_SITE_DEF = [
     # 2-Pyridylsulfonamide: sulfapyridine pKa=8.43. Pyridine N at ortho
     # withdraws electron density → pKa lowered vs plain aryl (9.7) but
     # still > 7.4 → neutral dominates at pH 7.4.  Must precede aryl_NH.
-    ("sulfonamide_2pyridyl_NH",    "[SX4](=O)(=O)[NX3;H1]c1ccccn1",               8.4,  "acid"),
+    ("sulfonamide_2pyridyl_NH",    "[SX4](=O)(=O)[NX3;H1]c1ccccn1",               6.4,  "acid"),
     ("sulfonamide_3pyridyl_NH",    "[SX4](=O)(=O)[NX3;H1]c1cnccc1",               9.0,  "acid"),
     ("sulfonamide_4pyridyl_NH",    "[SX4](=O)(=O)[NX3;H1]c1ccncc1",               9.0,  "acid"),
     ("sulfonamide_aryl_NH",        "[SX4](=O)(=O)[NX3;H1,H2][c]",                        9.7,  "acid"),
