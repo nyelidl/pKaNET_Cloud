@@ -1234,6 +1234,14 @@ def score_microstate_full(microstate_smiles, tautomer_smiles, taut_plausibility,
         s_multi -= 2.5 * (n_pos - 1)
     if n_pos >= 4 and n_neg == 0:
         s_multi -= 4.0
+    # Docking-conservative patch: avoid multi-anion (-2/-3) for polyphenol /
+    # bis-coumarin / flavonoid systems when only heuristic pKa available.
+    # Consistent with pKaNET.py behaviour — keep to monoanion for docking.
+    if n_neg >= 2 and n_pos == 0 and not pubchem_result.get("available") and not ml_predictions:
+        _acid_lbl = " ".join(str(s.get("label", "")).lower() for s in ion_sites if s.get("site_type") == "acid")
+        _soft_keys = ("phenol", "catechol", "flavone", "warfarin", "enol", "coumarin")
+        if any(k in _acid_lbl for k in _soft_keys):
+            s_multi -= 7.0 * (n_neg - 1)
 
     expected_net = _expected_net_charge_from_sites(ion_sites, target_ph)
     s_target_net = 0.0
