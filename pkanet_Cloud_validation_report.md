@@ -1,4 +1,4 @@
-# pKaNET Cloud — Validation Report
+# pKaNET Cloud+ — Validation Report
 **Version:** core.py
 **Date:** 2026-05-19 04:08 UTC  
 **Test harness:** `test_pkanet.py` — 65 cases across 12 functional groups  
