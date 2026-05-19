@@ -546,6 +546,7 @@ _PAT_POLYHALO_METHYL_COOH        = Chem.MolFromSmarts("[CX3](=O)([OX2H1])[CX4]([
 _PAT_NITROPHENOL_ANY             = Chem.MolFromSmarts("[OX2H1][c;R]1[c;R,c;R][c;R,c;R][c;R,c;R]([$([NX3+](=O)[O-]),$([NX3](=O)=O)])[c;R,c;R][c;R,c;R]1")
 _PAT_PENTAFLUOROPHENOL           = Chem.MolFromSmarts("[OX2H1]c1c(F)c(F)c(F)c(F)c1F")
 _PAT_WARFARIN_ENOL               = Chem.MolFromSmarts("[OX2H1]c1c([#6])c(=O)oc2ccccc12")
+_PAT_CHROMANONE_ENOL_OH          = Chem.MolFromSmarts("[OX2H1][CX3;R]([c])=[CX3;R]")  # non-aromatic chromanone enol (warfarin keto path)
 _PAT_FUROSEMIDE_SULFONAMIDE      = Chem.MolFromSmarts("[NX3;H1,H2][SX4](=O)(=O)[c]")
 _PAT_BETA_HYDROXY_CARBOXYL       = Chem.MolFromSmarts("[OX2H1][CX4][CX4][CX3](=O)[OX2H1,OX1-]")
 _PAT_GLYPHOSATE_BACKBONE         = Chem.MolFromSmarts("[PX4](=O)([OX2H1,OX1-])([OX2H1,OX1-])[CX4][NX3][CX4][CX3](=O)[OX2H1,OX1-]")
@@ -775,13 +776,13 @@ def _find_flavone_A_ring_phenols(mol):
         ortho_to_ring_O = ring_oxygen_idx is not None and ring_oxygen_idx in chromone_nbrs
         n_ortho_phenols = sum(1 for n in ortho_carbons if _has_phenolic_OH(n))
         if ortho_to_carbonyl:
-            label, pka = ("flavone_3OH_flavonol", 7.0) if carbonyl_direct else ("flavone_5OH_chelated", 11.0)
+            label, pka = ("flavone_3OH_flavonol", 7.8) if carbonyl_direct else ("flavone_5OH_chelated", 11.0)
         elif ortho_to_ring_O:
             label, pka = "flavone_8OH_ortho_pyranO", 8.5
         elif n_ortho_phenols >= 2:
             label, pka = "flavone_6OH_pyrogallol_center", 8.5
         elif n_ortho_phenols == 1:
-            label, pka = "flavone_phenol_catechol_pair", 7.0  # ACD patch: match pKaNET Cloud CSV rank-1 anion at pH 7.4
+            label, pka = "flavone_phenol_catechol_pair", 8.0  # corrected: 6-OH stays neutral at pH 7.4
         else:
             label, pka = "flavone_phenol_isolated", 8.5  # isolated flavone phenol (e.g. apigenin 7-OH actual pKa ~8.7)
         sites.append({"label": label, "atom_indices": [o_idx, c_idx], "heuristic_pka": pka, "site_type": "acid"})
@@ -959,6 +960,17 @@ def find_ionizable_sites(mol):
                 sites.append(dict(label="warfarin_enol_acid", atom_indices=[oh],
                                   heuristic_pka=5.0, site_type="acid"))
 
+    # (11b) Non-aromatic chromanone enol (warfarin keto-form tautomer path):
+    # C4(OH)=C3 in benzo-fused chromanone ring; fires on enol tautomer generated
+    # from keto-form input, pKa ~5.0 (warfarin experimental pKa 4.8–5.1).
+    if _PAT_CHROMANONE_ENOL_OH is not None:
+        for match in mol.GetSubstructMatches(_PAT_CHROMANONE_ENOL_OH):
+            oh = match[0]
+            if oh not in seen_ion and oh not in claimed_atoms:
+                seen_ion.add(oh); claimed_atoms.add(oh)
+                sites.append(dict(label="warfarin_chromanone_enol_acid", atom_indices=[oh],
+                                  heuristic_pka=5.0, site_type="acid"))
+
     # (12) Furosemide-like aryl sulfonamide with an additional carboxylic acid.
     _cooh = Chem.MolFromSmarts("[CX3](=O)[OX2H1]")
     has_carboxyl = bool(_cooh and mol.HasSubstructMatch(_cooh))
@@ -979,13 +991,13 @@ def find_ionizable_sites(mol):
                 sites.append(dict(label="beta_hydroxy_carboxyl_conservative", atom_indices=[oh],
                                   heuristic_pka=13.5, site_type="acid"))
 
-    # (14) Glyphosate amine is weak/neutral in this validation model.
+    # (14) Glyphosate amine: pKa ~10.1 (protonated at pH 7.4, balancing 3 anions → net -2).
     if _PAT_GLYPHOSATE_BACKBONE is not None and mol.HasSubstructMatch(_PAT_GLYPHOSATE_BACKBONE):
         for atom in mol.GetAtoms():
             if atom.GetAtomicNum() == 7 and atom.GetFormalCharge() == 0 and atom.GetIdx() not in seen_ion:
                 seen_ion.add(atom.GetIdx()); claimed_atoms.add(atom.GetIdx())
-                sites.append(dict(label="glyphosate_amine_weak", atom_indices=[atom.GetIdx()],
-                                  heuristic_pka=5.5, site_type="base"))
+                sites.append(dict(label="glyphosate_amine", atom_indices=[atom.GetIdx()],
+                                  heuristic_pka=10.1, site_type="base"))
                 break
 
     # (15) Tertiary cyclic amines — context-aware pKa assignment.
@@ -1045,7 +1057,7 @@ def find_ionizable_sites(mol):
         if nidx not in seen_ion and nidx not in claimed_atoms:
             seen_ion.add(nidx); claimed_atoms.add(nidx)
             sites.append(dict(label="methotrexate_pteridine_extra_acid", atom_indices=[nidx],
-                              heuristic_pka=6.8, site_type="acid"))
+                              heuristic_pka=8.5, site_type="acid"))
 
     # Pass 1: Diprotic phosphorus acids (Bug A fix)
     for pat_dp, pka1, pka2, lbl_dp in _DIPROTIC_P_COMPILED:
@@ -1420,6 +1432,16 @@ def generate_ranked_microstates(base_smiles, target_ph=7.4, ph_window=1.0, max_t
         print(f"   🔬  Discarded {len(disc)} implausible tautomers (e.g. score={disc[0]['score']:.1f}: {disc[0]['smiles'][:55]})")
     ml_preds  = unipka_predict(base_smiles)
     ion_sites = find_ionizable_sites(ref_mol) if ref_mol else []
+    # Tautomer fallback: if parent has no ionizable sites (e.g. warfarin keto form),
+    # check kept tautomers — their enol/tautomeric OH may carry the active pKa event.
+    if not ion_sites:
+        for taut_entry in kept:
+            t_mol = Chem.MolFromSmiles(taut_entry["smiles"])
+            if t_mol:
+                t_sites = find_ionizable_sites(t_mol)
+                if t_sites:
+                    ion_sites = t_sites
+                    break
     all_micro = []; seen_smi = set()
     ph_lo = max(0.0, target_ph - ph_window / 2); ph_hi = min(14.0, target_ph + ph_window / 2)
     for ti, taut in enumerate(kept, 1):
