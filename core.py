@@ -1,4 +1,4 @@
-# core.py  —  pKaNET Cloud  (v70 corrected docking patch)
+# core.py  —  pKaNET Cloud+  (v80 — calibrated heuristic + fast predict API)
 #
 # ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
@@ -472,9 +472,15 @@ _IONIZABLE_SITE_DEF = [
     # ── Thiols ────────────────────────────────────────────────────────────────
     # Bug B fix: Cys-like thiol alpha to amine pKa~8.3; recursive SMARTS.
     ("thiol_alpha_amino",          "[SX2H1;$([SX2H1][CX4][CX4][NX3;!$(NC=O)])]",              8.3,  "acid"),
-    ("thiol_arom",                 "c[SX2H1]",                                            6.5,  "acid"),  # thiophenol 6.6, avg aryl thiol ~7.5 after validation correction
+    # Aromatic thiol adjacent to ring N (heteroaryl thiol, e.g. quinoline-8-thiol pKa~7.8):
+    # electron-withdrawing ring N raises pKa vs plain thiophenol (6.6). Must precede thiol_arom.
+    ("thiol_hetarom",              "[c;$([c]1[c,n][c,n][c,n][n,s,o]1)][SX2H1]",              7.9,  "acid"),
+    ("thiol_arom",                 "c[SX2H1]",                                            6.5,  "acid"),  # thiophenol 6.6
     ("thiol_aliph",                "[CX4][SX2H1]",                                        9.8,  "acid"),
     # ── Bases ─────────────────────────────────────────────────────────────────
+    # N-oxide: Ar-N(+)(-O-) — the conjugate acid has pKa ~ −1.5; neutral (zwitterion) at pH 7.4
+    # Must precede pyridine_like so the ring N is not also counted as a base.
+    ("n_oxide_neutral",            "[$([nX3+]~[OX1-]),$([NX3+](=O)[OX1-])]",               -1.5, "base"),
     # Aniline with EWG: strongly depressed pKa (4-nitroaniline=1.0, 4-CN=1.7 → avg ~2.5)
     ("aniline_EWG",                "c[NX3;H1,H2;!$(N~[!#6])][$([NX3+](=O)[O-]),$([NX3](=O)=O),$(C#N),$([SX4](=O)(=O))]", 2.5, "base"),
     # Aniline with para-EWG on the SAME aromatic ring (through-ring resonance withdrawal).
@@ -499,9 +505,8 @@ _IONIZABLE_SITE_DEF = [
     # Fluoroalkyl-adjacent amine: strongly suppressed by induction
     ("amine_fluoroalkyl",          "[NX3;H1,H2;!$(NC=O);!$([nH]);$([NX3][CX4][$([CX4](F)(F)),$([CX4](F)(F)F)])]", 6.5, "base"),
     ("aliphatic_amine",            "[NX3;H1,H2;!$(NC=O);!$(N~[!#6;!H]);!$([nH]);!$([NX3][CX3](=[NX2])[NX3])]",        9.5,  "base"),
-    # Tertiary aliphatic amine: pKa ~8.8 (trimethylamine=9.8, but validation bias
-    # shows +0.10 over-protonation → reduce slightly from 9.0 to 8.8)
-    ("aliphatic_amine_t",          "[NX3;H0;!$(NC=O);!$(Nc);!$([nH]);!$([N]~[!#6]);!$([NX3]([CX4][CX3]=O)[CX4][CX3]=O)]",    8.8,  "base"),
+    # Tertiary aliphatic amine: pKa ~8.5 (trimethylamine=9.8 but multi-subst. lowers; v80 recalibrated)
+    ("aliphatic_amine_t",          "[NX3;H0;!$(NC=O);!$(Nc);!$([nH]);!$([N]~[!#6]);!$([NX3]([CX4][CX3]=O)[CX4][CX3]=O)]",    8.5,  "base"),
     ("amidine",                    "[CX3](=[NX2;H0,H1])[NX3;H1,H2;!$([NX3][CX3](=[NX2])[NX3])]",                     12.4, "base"),
     ("guanidine",                  "[NX2;H1;$([NX2]=[CX3]([NX3])[NX3])]",                  12.5, "base"),  # imine =NH only; was 13.0, bias +0.31→ lower to 12.5
 ]
@@ -1835,3 +1840,226 @@ def zip_all_outputs(out_dir, zip_path):
         for p in out.rglob("*"):
             if p.is_file(): z.write(p, arcname=p.relative_to(out))
     return str(zp)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v80 PUBLIC FAST-PREDICT API
+# ─────────────────────────────────────────────────────────────────────────────
+
+def heuristic_net_charge(smiles: str, ph: float = 7.4) -> int | None:
+    """Fast formal-charge estimate using the ionizable-site SMARTS table + H-H.
+
+    Unlike the full microstate pipeline this runs in <1 ms per molecule and
+    needs no tautomer enumeration or Dimorphite call. It applies the same
+    multi-site charge-cap logic used by `_expected_net_charge_from_sites` so
+    polyamine and multi-acid molecules are handled conservatively.
+
+    Returns the predicted integer charge, or None if the SMILES is invalid.
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+
+    sites = find_ionizable_sites(mol)
+    if not sites:
+        return 0
+
+    acid_charge = 0
+    base_charge = 0
+
+    for site in sites:
+        pka   = float(site.get("heuristic_pka", 7.4))
+        stype = site.get("site_type", "acid")
+        label = str(site.get("label", "")).lower()
+
+        # Skip conservative OH proxies that should never ionise at pH 7.4
+        if "hydroxy_carboxyl_conservative" in label and ph < 12.5:
+            continue
+
+        f_charged = (1.0 / (1.0 + 10.0 ** (pka - ph))   if stype == "acid"
+                     else 1.0 / (1.0 + 10.0 ** (ph - pka)))
+
+        if f_charged > 0.5:
+            if stype == "acid":
+                acid_charge -= 1
+            else:
+                base_charge += 1
+
+    # ── Multi-site charge caps (mirrors _expected_net_charge_from_sites) ────
+    # Cap 1: polyamine with no counterbalancing acid → at most +2 for 3+ strong
+    # bases, +1 otherwise.
+    if acid_charge == 0 and base_charge > 1:
+        n_strong_base = sum(
+            1 for s in sites
+            if s.get("site_type") == "base"
+            and float(s.get("heuristic_pka", 0)) - ph > 2.0
+        )
+        base_charge = min(base_charge, 2) if n_strong_base >= 3 else 1
+
+    # Cap 2: multi-acid with no counterbalancing base → cap at the number of
+    # acid sites whose pKa is CLEARLY below ph (pKa < ph − 1.5). Sites that
+    # are borderline (within 1.5 units) are unlikely to be simultaneously fully
+    # deprotonated in solution.
+    if base_charge == 0 and acid_charge < -1:
+        n_clear_acid = sum(
+            1 for s in sites
+            if s.get("site_type") == "acid"
+            and (ph - float(s.get("heuristic_pka", 0))) > 1.5
+            and "hydroxy_carboxyl_conservative" not in str(s.get("label", ""))
+        )
+        acid_charge = max(acid_charge, -max(n_clear_acid, 1))
+
+    return max(-6, min(6, acid_charge + base_charge))
+
+
+def predict_charge(
+    smiles: str,
+    ph: float = 7.4,
+    mode: str = "auto",
+    pubchem_result: dict | None = None,
+    ph_window: float = 1.0,
+    max_tautomers: int = 8,
+    top_n: int = 5,
+) -> tuple[int | None, str]:
+    """Predict formal charge at *ph* for a single molecule.
+
+    Parameters
+    ----------
+    smiles        : SMILES string (any valid RDKit-parseable form)
+    ph            : target pH (default 7.4)
+    mode          : ``'fast'``  – heuristic SMARTS+H-H only (< 1 ms)
+                    ``'full'``  – complete tautomer+Dimorphite+scoring pipeline
+                    ``'auto'``  – fast unless any detected pKa is within 1.5 pH
+                                  units of *ph* (borderline), in which case the
+                                  full pipeline is used automatically
+    pubchem_result: pre-fetched PubChem pKa dict (optional, used by full mode)
+    ph_window     : passed to full pipeline (default 1.0)
+    max_tautomers : passed to full pipeline (default 8)
+    top_n         : passed to full pipeline (default 5)
+
+    Returns
+    -------
+    (charge, mode_used) where mode_used is 'fast', 'full', or 'fast_fallback'
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None, "invalid"
+
+    if mode == "fast":
+        return heuristic_net_charge(smiles, ph), "fast"
+
+    if mode in ("auto", "full"):
+        sites = find_ionizable_sites(mol) if mode == "auto" else []
+        is_borderline = any(abs(ph - float(s.get("heuristic_pka", ph + 99))) <= 1.5
+                            for s in sites)
+        # In auto mode, escalate to full pipeline when:
+        # (a) any site has pKa within 1.5 of ph, OR
+        # (b) no sites found on the parent but molecule has rings and >4 heavy atoms —
+        #     could be a tautomeric enol acid (e.g. warfarin) where the acidic OH
+        #     only exists in a non-input tautomer.
+        tautomeric_risk = (mode == "auto" and not sites
+                           and mol.GetRingInfo().NumRings() > 0
+                           and mol.GetNumHeavyAtoms() > 4)
+        if mode == "auto" and not is_borderline and not tautomeric_risk:
+            return heuristic_net_charge(smiles, ph), "fast"
+
+        # Full pipeline
+        try:
+            top, _, _, _, _, _ = generate_ranked_microstates(
+                smiles,
+                target_ph=ph,
+                ph_window=ph_window,
+                max_tautomers=max_tautomers,
+                top_n=top_n,
+                pubchem_result=pubchem_result or {},
+            )
+            if top:
+                return top[0]["net_charge"], "full"
+        except Exception:
+            pass
+        # Fall back to fast if full pipeline fails
+        return heuristic_net_charge(smiles, ph), "fast_fallback"
+
+    raise ValueError(f"Unknown mode: {mode!r}. Use 'fast', 'full', or 'auto'.")
+
+
+def batch_predict_charges(
+    records,
+    ph: float = 7.4,
+    mode: str = "auto",
+    pubchem_lookup: bool = False,
+    progress: bool = False,
+) -> "pd.DataFrame":
+    """Batch formal-charge prediction for a list of molecules.
+
+    Parameters
+    ----------
+    records       : iterable of SMILES strings **or** (smiles, name) tuples
+    ph            : target pH (default 7.4)
+    mode          : 'fast', 'full', or 'auto' (see ``predict_charge``)
+    pubchem_lookup: if True, query PubChem for each molecule (slow; default False)
+    progress      : print a dot every 1000 molecules (default False)
+
+    Returns
+    -------
+    pandas DataFrame with columns:
+        name, smiles, predicted_charge, mode_used, n_ion_sites,
+        borderline_pka, is_zwitterion, error
+    """
+    try:
+        import pandas as _pd
+    except ImportError:
+        raise ImportError("pandas is required for batch_predict_charges()")
+
+    rows = []
+    for i, rec in enumerate(records):
+        if isinstance(rec, str):
+            smi, name = rec, f"mol_{i+1:06d}"
+        else:
+            smi, name = rec[0], (rec[1] if len(rec) > 1 else f"mol_{i+1:06d}")
+
+        row: dict = {"name": name, "smiles": smi, "predicted_charge": None,
+                     "mode_used": "error", "n_ion_sites": 0,
+                     "borderline_pka": False, "is_zwitterion": False, "error": None}
+        try:
+            mol = Chem.MolFromSmiles(smi)
+            if mol is None:
+                row["error"] = "invalid_smiles"
+            else:
+                sites = find_ionizable_sites(mol)
+                row["n_ion_sites"] = len(sites)
+                row["borderline_pka"] = any(
+                    abs(ph - float(s.get("heuristic_pka", ph + 99))) <= 1.5
+                    for s in sites
+                )
+                pc = pubchem_lookup_fn(smi) if pubchem_lookup else {}
+                charge, mode_used = predict_charge(
+                    smi, ph=ph, mode=mode, pubchem_result=pc)
+                row["predicted_charge"] = charge
+                row["mode_used"]        = mode_used
+                # Zwitterion: has both + and - sites predicted charged
+                acid_ch = sum(
+                    1 for s in sites
+                    if s.get("site_type") == "acid"
+                    and (1.0 / (1.0 + 10 ** (float(s.get("heuristic_pka", 14)) - ph))) > 0.5
+                )
+                base_ch = sum(
+                    1 for s in sites
+                    if s.get("site_type") == "base"
+                    and (1.0 / (1.0 + 10 ** (ph - float(s.get("heuristic_pka", 0))))) > 0.5
+                )
+                row["is_zwitterion"] = bool(acid_ch > 0 and base_ch > 0)
+        except Exception as exc:
+            row["error"] = str(exc)[:120]
+
+        rows.append(row)
+        if progress and (i + 1) % 1000 == 0:
+            print(f"  batch_predict_charges: {i+1} done …", flush=True)
+
+    return _pd.DataFrame(rows, columns=[
+        "name", "smiles", "predicted_charge", "mode_used",
+        "n_ion_sites", "borderline_pka", "is_zwitterion", "error",
+    ])
+
+
+# Alias for backwards-compat with older call sites that used pubchem_lookup directly
+pubchem_lookup_fn = pubchem_lookup
