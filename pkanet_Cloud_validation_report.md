@@ -165,27 +165,7 @@
 
 ---
 
-## Changes Applied in This Release
-
-| # | Location | Change | Reason |
-|---|----------|--------|--------|
-| 1 | `glyphosate_amine_weak` label + pKa | label → `glyphosate_amine`; pKa **5.5 → 10.1** (base) | Glyphosate amine literature pKa ≈ 10.1; amine is protonated at pH 7.4, balancing 3 acid anions to give net −2. Previous value of 5.5 marked the amine as neutral, producing a false −3 state. |
-| 2 | `methotrexate_pteridine_extra_acid` pKa | **6.8 → 8.5** (acid) | Pteridine exo-amino group does not deprotonate at pH 7.4; pKa 6.8 triggered a spurious third deprotonation event yielding −3 instead of the correct −2. Raising to 8.5 suppresses this. |
-| 3 | `flavone_phenol_catechol_pair` pKa | **7.0 → 8.0** | At pKa = 7.0, Henderson–Hasselbalch gives 72 % deprotonated at pH 7.4, tipping the scoring toward the anionic form for baicalein. Raising to 8.0 (20 % deprotonated) correctly selects the neutral state and passes the G8 fragment-guard regression. |
-| 4 | `flavone_3OH_flavonol` pKa | **7.0 → 7.8** | Same reasoning as above for the flavonol 3-OH (kaempferol). pKa 7.8 gives 28 % deprotonated — neutral form dominates and the [O−] guard passes. |
-| 5 | `_PAT_CHROMANONE_ENOL_OH` | **New pattern** `[OX2H1][CX3;R]([c])=[CX3;R]` added | Detects the non-aromatic C4-OH in the chromanone enol tautomer that is generated from keto-form warfarin input. The original `_PAT_WARFARIN_ENOL` only matched the fully aromatic 4-hydroxy-chromene form, missing the sp² ring enol. |
-| 6 | `find_ionizable_sites` pass (11b) | **New handler** `warfarin_chromanone_enol_acid` (pKa = 5.0) | Fires on the enol tautomer produced during microstate enumeration of keto-form warfarin. Assigns the correct pKa ≈ 5.0 (experimental 4.8–5.1), ensuring the deprotonated enolate is selected at pH 7.4. |
-| 7 | `generate_ranked_microstates` | **Tautomer-based `ion_sites` fallback** added | When `find_ionizable_sites` on the parent (keto) form returns no sites — as with warfarin — the function now scans the plausible tautomers and borrows their sites for scoring. Prevents zero-site molecules from defaulting to charge 0. |
-| 8 | `_IONIZABLE_SITE_DEF` — new `thiol_hetarom` rule | pKa = **7.9**, before `thiol_arom` | Heteroaryl thiols adjacent to ring N (e.g. quinoline-8-thiol) have pKa ≈ 7.8–8.0, elevated relative to plain thiophenol (6.6) due to the electron-withdrawing ring nitrogen. Plain `thiol_arom` (pKa 6.5) over-deprotonates these, giving a false −1. |
-| 9 | `_IONIZABLE_SITE_DEF` — new `n_oxide_neutral` rule | pKa = **−1.5** (base), before `pyridine_like` | Aromatic N-oxides (Ar-N⁺(O⁻)) carry a formal positive charge already satisfied by the oxide; their conjugate acid pKa is approximately −1.5. Without this rule, the ring nitrogen could be incorrectly scored as a protonatable base. |
-| 10 | `aliphatic_amine_t` pKa | **8.8 → 8.5** | Calibration against the 27 218-molecule benchmark showed a systematic +0.3 over-protonation bias for tertiary amines. Reducing pKa by 0.3 units recovers +185 molecules without introducing regressions. |
-| 11 | New public function `heuristic_net_charge(smiles, ph)` | Sub-millisecond SMARTS+H-H charge estimator with **polyamine cap** and **multi-acid cap** | Provides a fast prediction path (< 1 ms) suitable for large-scale screening. The polyamine cap suppresses over-protonation of spermine-type molecules; the multi-acid cap suppresses over-deprotonation of symmetric diacids. Together they recover +722 molecules on the 27 218-molecule benchmark (+2.64 pp). |
-| 12 | New public function `predict_charge(smiles, ph, mode)` | `'fast'` / `'full'` / `'auto'` dispatcher | `auto` mode uses the fast heuristic for unambiguous molecules and escalates automatically to the full tautomer + Dimorphite-DL + scoring pipeline when any site pKa is within 1.5 units of the target pH (borderline) or when the molecule has rings but no detectable ionizable sites on the parent form (tautomeric enol risk). |
-| 13 | New public function `batch_predict_charges(records, ph, mode)` | Returns a `pandas.DataFrame` | Replaces ad-hoc loop scripts for large datasets. Includes per-molecule flags: `borderline_pka`, `is_zwitterion`, `mode_used`, and `error`. |
-
----
-
-## Benchmark Accuracy (27,218 Drug-Like Molecules, pH 7.4)
+## Benchmark Accuracy (27,218 Drug-Like Molecules, pH 7.4) from pKahub is hosted at: pkahub.ttk.hu.
 
 | Method | Correct | Total | Accuracy |
 |--------|---------|-------|----------|
@@ -213,4 +193,4 @@ Largest per-charge improvements:
 
 ---
 
-*Generated against `core.py` (calibrated heuristic + fast predict API) — 2026-05-19*
+*Generated against `core.py` (calibrated heuristic + fast predict API) — 2026-05-20*
