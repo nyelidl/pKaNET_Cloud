@@ -820,7 +820,7 @@ NCC(=O)O
 st.markdown("---")
 st.markdown(
     f"<div style='text-align:center;color:#666;font-size:0.9rem;'>"
-    f"<img src='{_LOGO_URL}' style='width:20px;height:20px;vertical-align:middle;margin-right:5px;' />"
+    f"<img src='{_HEADER_LOGO_URL}' style='width:20px;height:20px;vertical-align:middle;margin-right:5px;' />"
     f"pKaNET Cloud+ — "
     f"<a href='mailto:kowith@ccs.tsukuba.ac.jp'>kowith@ccs.tsukuba.ac.jp</a>"
     f"</div>",
