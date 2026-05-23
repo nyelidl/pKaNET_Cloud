@@ -25,18 +25,59 @@ except (ImportError, OSError):
         def MolToImage(*a, **kw):
             return None
 
-st.set_page_config(page_title="pKaNET Cloud+", layout="wide", page_icon="🧪")
+_LOGO_URL = (
+    "https://raw.githubusercontent.com/nyelidl/pKaNET_Cloud"
+    "/30b7d67ba323099789fbb4f4e597cb7ab9f8495d/pKaN2.svg"
+)
+
+st.set_page_config(page_title="pKaNET Cloud+", layout="wide", page_icon=_LOGO_URL)
 
 st.markdown("""
 <style>
-.main-header { font-size:2.5rem; font-weight:bold; color:#1f77b4;
-               text-align:center; margin-bottom:0.5rem; }
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@900&display=swap');
+
+.main-header {
+    font-family: 'Arial Rounded MT Bold', 'Arial Rounded MT', 'Nunito', sans-serif;
+    font-size: 2.5rem;
+    font-weight: 900;
+    text-align: center;
+    margin-bottom: 0.5rem;
+    background: linear-gradient(120deg, #00f5c4 0%, #60b4ff 40%, #ff6eb4 80%, #ffe660 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: headerShimmer 4s linear infinite;
+    display: inline-block;
+    width: 100%;
+}
+@keyframes headerShimmer {
+    0%   { background-position: 0% center; }
+    100% { background-position: 200% center; }
+}
+.main-header-wrap { text-align: center; }
+
+.main-header-logo {
+    width: 52px;
+    height: 52px;
+    vertical-align: middle;
+    margin-right: 0.4rem;
+    margin-bottom: 0.3rem;
+    filter: drop-shadow(0 0 10px rgba(0,245,196,.45));
+}
+
 .sub-header  { text-align:center; color:#666; margin-bottom:2rem; }
 .stDownloadButton button { width:100%; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header">🧪 pKaNET Cloud+</div>', unsafe_allow_html=True)
+st.markdown(
+    f'<div class="main-header-wrap">'
+    f'<img class="main-header-logo" src="{https://github.com/nyelidl/pKaNET_Cloud/blob/2b736479e65b589f1395ed697c17a0ccbeb60d6e/pKaN.svg}" alt="pKaNET logo" />'
+    f'<span class="main-header">pKaNET Cloud+</span>'
+    f'</div>',
+    unsafe_allow_html=True,
+)
 st.markdown(
     '<div class="sub-header">'
     'Tautomer-aware microstate ranking · Henderson–Hasselbalch scoring · '
