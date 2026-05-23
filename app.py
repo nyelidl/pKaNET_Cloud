@@ -36,12 +36,7 @@ _HEADER_LOGO_URL = (
 # ══════════════════════════════════════════════════════════════════════════════
 #  PAGE CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
-st.set_page_config(
-    page_title="pKaNET Cloud+",
-    page_icon="_LOGO_URL",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+st.set_page_config(page_title="pKaNET Cloud+", layout="wide", page_icon="🧪")
 
 st.markdown("""
 <style>
@@ -67,7 +62,6 @@ st.markdown("""
     100% { background-position: 200% center; }
 }
 .main-header-wrap { text-align: center; }
-
 .main-header-logo {
     width: 80px;
     height: 80px;
@@ -76,7 +70,6 @@ st.markdown("""
     margin-bottom: 0.3rem;
     filter: drop-shadow(0 0 10px rgba(0,245,196,.45));
 }
-
 .sub-header  { text-align:center; color:#666; margin-bottom:2rem; }
 .stDownloadButton button { width:100%; }
 </style>
