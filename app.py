@@ -73,7 +73,7 @@ st.markdown("""
 
 st.markdown(
     f'<div class="main-header-wrap">'
-    f'<img class="main-header-logo" src="{https://github.com/nyelidl/pKaNET_Cloud/blob/2b736479e65b589f1395ed697c17a0ccbeb60d6e/pKaN.svg}" alt="pKaNET logo" />'
+    f'<img class="main-header-logo" src="https://github.com/nyelidl/pKaNET_Cloud/blob/2b736479e65b589f1395ed697c17a0ccbeb60d6e/pKaN.svg" alt="pKaNET logo" />'
     f'<span class="main-header">pKaNET Cloud+</span>'
     f'</div>',
     unsafe_allow_html=True,
