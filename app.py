@@ -33,8 +33,15 @@ _HEADER_LOGO_URL = (
     "https://raw.githubusercontent.com/nyelidl/pKaNET_Cloud"
     "/2b736479e65b589f1395ed697c17a0ccbeb60d6e/pKaN.svg"
 )
-
-st.set_page_config(page_title="pKaNET Cloud+", layout="wide", page_icon=_LOGO_URL)
+# ══════════════════════════════════════════════════════════════════════════════
+#  PAGE CONFIG
+# ══════════════════════════════════════════════════════════════════════════════
+st.set_page_config(
+    page_title="pKaNET Cloud+",
+    page_icon="_LOGO_URL",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
 st.markdown("""
 <style>
