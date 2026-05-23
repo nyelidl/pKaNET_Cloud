@@ -7,7 +7,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="pKaNET Cloud+" />
-  <meta name="theme-color" content="#0d0f1e" />
+  <meta name="theme-color" content="#0d0f1e" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#eef2ff" media="(prefers-color-scheme: light)" />
 
   <title>pKaNET Cloud+</title>
 
@@ -22,17 +23,45 @@
       box-sizing: border-box;
     }
 
+    /* ─── DARK (default) ─────────────────────────────────────── */
     :root {
       --font: 'Arial Rounded MT Bold', 'Arial Rounded MT', 'Nunito', sans-serif;
-      --mint: #00f5c4;
-      --pink: #ff6eb4;
+      --mint:   #00f5c4;
+      --pink:   #ff6eb4;
       --yellow: #ffe660;
-      --blue: #60b4ff;
+      --blue:   #60b4ff;
       --orange: #ff9f43;
       --purple: #c084fc;
-      --bg: #0d0f1e;
-      --text: #f0f4ff;
-      --muted: rgba(240,244,255,.45);
+
+      --bg:        #0d0f1e;
+      --text:      #f0f4ff;
+      --muted:     rgba(240,244,255,.45);
+      --card-bg:   transparent;
+      --bubble-bg: rgba(255,255,255,.07);
+      --bubble-bd: rgba(255,255,255,.12);
+      --bar-bg:    rgba(255,255,255,.07);
+      --blob-op:   0.18;
+      --footer-c:  rgba(240,244,255,.2);
+      --tag1-bg: rgba(0,245,196,.15);   --tag1-c: #00f5c4; --tag1-bd: rgba(0,245,196,.3);
+      --tag2-bg: rgba(96,180,255,.15);  --tag2-c: #60b4ff; --tag2-bd: rgba(96,180,255,.3);
+      --tag3-bg: rgba(255,110,180,.15); --tag3-c: #ff6eb4; --tag3-bd: rgba(255,110,180,.3);
+    }
+
+    /* ─── LIGHT ──────────────────────────────────────────────── */
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg:        #eef2ff;
+        --text:      #1a1d3a;
+        --muted:     rgba(26,29,58,.45);
+        --bubble-bg: rgba(26,29,58,.06);
+        --bubble-bd: rgba(26,29,58,.15);
+        --bar-bg:    rgba(26,29,58,.1);
+        --blob-op:   0.22;
+        --footer-c:  rgba(26,29,58,.25);
+        --tag1-bg: rgba(0,180,140,.12);   --tag1-c: #007f68; --tag1-bd: rgba(0,180,140,.35);
+        --tag2-bg: rgba(50,140,230,.12);  --tag2-c: #2563c4; --tag2-bd: rgba(50,140,230,.35);
+        --tag3-bg: rgba(220,60,140,.12);  --tag3-c: #b01870; --tag3-bd: rgba(220,60,140,.35);
+      }
     }
 
     html, body {
@@ -51,8 +80,10 @@
       text-align: center;
       padding: 1.5rem 1rem;
       overflow: hidden;
+      transition: background 0.4s, color 0.4s;
     }
 
+    /* ─── BLOBS ──────────────────────────────────────────────── */
     .blobs {
       position: fixed;
       inset: 0;
@@ -65,56 +96,51 @@
       position: absolute;
       border-radius: 50%;
       filter: blur(70px);
-      opacity: 0.18;
+      opacity: var(--blob-op);
       animation: blobDrift linear infinite;
     }
 
     .blob:nth-child(1) {
-      width: 340px;
-      height: 340px;
+      width: 340px; height: 340px;
       background: var(--mint);
-      top: -80px;
-      left: -60px;
+      top: -80px; left: -60px;
       animation-duration: 18s;
     }
-
     .blob:nth-child(2) {
-      width: 280px;
-      height: 280px;
+      width: 280px; height: 280px;
       background: var(--pink);
-      bottom: -60px;
-      right: -50px;
+      bottom: -60px; right: -50px;
       animation-duration: 22s;
       animation-delay: -7s;
     }
-
     .blob:nth-child(3) {
-      width: 200px;
-      height: 200px;
+      width: 200px; height: 200px;
       background: var(--yellow);
-      top: 40%;
-      left: 60%;
+      top: 40%; left: 60%;
       animation-duration: 15s;
       animation-delay: -3s;
     }
-
     .blob:nth-child(4) {
-      width: 180px;
-      height: 180px;
+      width: 180px; height: 180px;
       background: var(--purple);
-      top: 60%;
-      left: 10%;
+      top: 60%; left: 10%;
       animation-duration: 19s;
       animation-delay: -11s;
     }
 
     @keyframes blobDrift {
-      0%, 100% { transform: translate(0,0) scale(1); }
-      25% { transform: translate(30px,-20px) scale(1.08); }
-      50% { transform: translate(-20px,30px) scale(0.95); }
-      75% { transform: translate(20px,15px) scale(1.05); }
+      0%,100% { transform: translate(0,0) scale(1); }
+      25%      { transform: translate(30px,-20px) scale(1.08); }
+      50%      { transform: translate(-20px,30px) scale(0.95); }
+      75%      { transform: translate(20px,15px) scale(1.05); }
     }
 
+    /* Light-mode blobs are more pastel — achieved by a white overlay */
+    @media (prefers-color-scheme: light) {
+      .blob { filter: blur(80px) saturate(0.7); }
+    }
+
+    /* ─── PARTICLES ──────────────────────────────────────────── */
     .particles {
       position: fixed;
       inset: 0;
@@ -130,12 +156,13 @@
     }
 
     @keyframes floatUp {
-      0% { transform: translateY(0) rotate(0deg); opacity: 0; }
-      10% { opacity: 0.7; }
-      90% { opacity: 0.4; }
+      0%   { transform: translateY(0) rotate(0deg);   opacity: 0; }
+      10%  { opacity: 0.7; }
+      90%  { opacity: 0.4; }
       100% { transform: translateY(-100vh) rotate(360deg); opacity: 0; }
     }
 
+    /* ─── CARD ───────────────────────────────────────────────── */
     .card {
       position: relative;
       z-index: 1;
@@ -147,9 +174,10 @@
 
     @keyframes bounceIn {
       from { opacity: 0; transform: scale(0.7) translateY(30px); }
-      to { opacity: 1; transform: scale(1) translateY(0); }
+      to   { opacity: 1; transform: scale(1) translateY(0); }
     }
 
+    /* ─── LOGO ───────────────────────────────────────────────── */
     .logo {
       width: 110px;
       height: 110px;
@@ -161,13 +189,22 @@
         drop-shadow(0 0 40px rgba(192,132,252,.25));
     }
 
-    @keyframes logoWiggle {
-      0%,100% { transform: translateY(0) rotate(-2deg) scale(1); }
-      25% { transform: translateY(-10px) rotate(2deg) scale(1.05); }
-      50% { transform: translateY(-6px) rotate(-1deg) scale(1.02); }
-      75% { transform: translateY(-12px) rotate(3deg) scale(1.06); }
+    @media (prefers-color-scheme: light) {
+      .logo {
+        filter:
+          drop-shadow(0 0 16px rgba(0,180,140,.35))
+          drop-shadow(0 0 32px rgba(150,80,220,.2));
+      }
     }
 
+    @keyframes logoWiggle {
+      0%,100% { transform: translateY(0)   rotate(-2deg) scale(1);    }
+      25%     { transform: translateY(-10px) rotate(2deg) scale(1.05); }
+      50%     { transform: translateY(-6px)  rotate(-1deg) scale(1.02);}
+      75%     { transform: translateY(-12px) rotate(3deg) scale(1.06); }
+    }
+
+    /* ─── H1 ─────────────────────────────────────────────────── */
     h1 {
       font-size: 2.2rem;
       font-weight: 900;
@@ -182,11 +219,22 @@
       animation: titleShimmer 4s linear infinite;
     }
 
+    /* Darker gradient for light backgrounds */
+    @media (prefers-color-scheme: light) {
+      h1 {
+        background: linear-gradient(120deg, #007f68 0%, #2563c4 40%, #b01870 80%, #c87c00 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        background-size: 200% auto;
+      }
+    }
+
     @keyframes titleShimmer {
-      0% { background-position: 0% center; }
+      0%   { background-position: 0%   center; }
       100% { background-position: 200% center; }
     }
 
+    /* ─── TAGS ───────────────────────────────────────────────── */
     .tags {
       display: flex;
       flex-wrap: wrap;
@@ -205,37 +253,36 @@
     }
 
     .tag:nth-child(1) {
-      background: rgba(0,245,196,.15);
-      color: var(--mint);
-      border: 1px solid rgba(0,245,196,.3);
+      background: var(--tag1-bg);
+      color: var(--tag1-c);
+      border: 1px solid var(--tag1-bd);
       animation-delay: 0.1s;
     }
-
     .tag:nth-child(2) {
-      background: rgba(96,180,255,.15);
-      color: var(--blue);
-      border: 1px solid rgba(96,180,255,.3);
+      background: var(--tag2-bg);
+      color: var(--tag2-c);
+      border: 1px solid var(--tag2-bd);
       animation-delay: 0.2s;
     }
-
     .tag:nth-child(3) {
-      background: rgba(255,110,180,.15);
-      color: var(--pink);
-      border: 1px solid rgba(255,110,180,.3);
+      background: var(--tag3-bg);
+      color: var(--tag3-c);
+      border: 1px solid var(--tag3-bd);
       animation-delay: 0.3s;
     }
 
     @keyframes tagPop {
       from { opacity: 0; transform: scale(0.5); }
-      to { opacity: 1; transform: scale(1); }
+      to   { opacity: 1; transform: scale(1); }
     }
 
+    /* ─── STATUS BUBBLE ──────────────────────────────────────── */
     .status-bubble {
       display: inline-flex;
       align-items: center;
       gap: 0.55rem;
-      background: rgba(255,255,255,.07);
-      border: 1.5px solid rgba(255,255,255,.12);
+      background: var(--bubble-bg);
+      border: 1.5px solid var(--bubble-bd);
       border-radius: 999px;
       padding: 0.45rem 1.1rem;
       font-size: 0.78rem;
@@ -259,6 +306,19 @@
       color: var(--orange);
     }
 
+    @media (prefers-color-scheme: light) {
+      .status-bubble.ready {
+        background: rgba(0,180,140,.12);
+        border-color: rgba(0,180,140,.5);
+        color: #007f68;
+      }
+      .status-bubble.warn {
+        background: rgba(200,100,0,.1);
+        border-color: rgba(200,100,0,.35);
+        color: #b05a00;
+      }
+    }
+
     .pulse-dot {
       width: 8px;
       height: 8px;
@@ -268,19 +328,25 @@
       flex-shrink: 0;
     }
 
+    @media (prefers-color-scheme: light) {
+      .pulse-dot { background: #007f68; }
+      .status-bubble.warn .pulse-dot { background: #b05a00; }
+    }
+
     .status-bubble.warn .pulse-dot {
       background: var(--orange);
     }
 
     @keyframes pulseDot {
-      0%,100% { transform: scale(1); opacity: 1; }
-      50% { transform: scale(0.3); opacity: 0.3; }
+      0%,100% { transform: scale(1);   opacity: 1;   }
+      50%     { transform: scale(0.3); opacity: 0.3; }
     }
 
+    /* ─── PROGRESS ───────────────────────────────────────────── */
     .progress-wrap {
       width: 260px;
       height: 8px;
-      background: rgba(255,255,255,.07);
+      background: var(--bar-bg);
       border-radius: 999px;
       margin-bottom: 1.8rem;
       overflow: hidden;
@@ -297,11 +363,19 @@
       animation: progressShimmer 1.8s linear infinite;
     }
 
+    @media (prefers-color-scheme: light) {
+      .progress-fill {
+        background: linear-gradient(90deg, #007f68, #2563c4, #b01870);
+        background-size: 200% auto;
+      }
+    }
+
     @keyframes progressShimmer {
-      0% { background-position: 0% center; }
+      0%   { background-position: 0%   center; }
       100% { background-position: 200% center; }
     }
 
+    /* ─── COUNTDOWN ──────────────────────────────────────────── */
     .countdown-wrap {
       min-height: 5rem;
       display: flex;
@@ -329,11 +403,20 @@
       animation: numBounce 0.5s cubic-bezier(.34,1.56,.64,1) both;
     }
 
-    @keyframes numBounce {
-      from { transform: scale(2) rotate(-8deg); opacity: 0; }
-      to { transform: scale(1) rotate(0deg); opacity: 1; }
+    @media (prefers-color-scheme: light) {
+      .countdown-num {
+        background: linear-gradient(135deg, #c87c00, #b01870);
+        -webkit-background-clip: text;
+        background-clip: text;
+      }
     }
 
+    @keyframes numBounce {
+      from { transform: scale(2) rotate(-8deg); opacity: 0; }
+      to   { transform: scale(1) rotate(0deg);  opacity: 1; }
+    }
+
+    /* ─── FALLBACK BUTTON ────────────────────────────────────── */
     .btn-manual {
       display: none;
       margin-top: 0.5rem;
@@ -349,18 +432,33 @@
       animation: btnPulse 2s ease-in-out infinite;
     }
 
+    @media (prefers-color-scheme: light) {
+      .btn-manual {
+        background: linear-gradient(120deg, #007f68, #2563c4);
+        color: #fff;
+      }
+    }
+
     @keyframes btnPulse {
       0%,100% { box-shadow: 0 0 0 0 rgba(0,245,196,.4); }
-      50% { box-shadow: 0 0 0 10px rgba(0,245,196,0); }
+      50%      { box-shadow: 0 0 0 10px rgba(0,245,196,0); }
+    }
+
+    @media (prefers-color-scheme: light) {
+      @keyframes btnPulse {
+        0%,100% { box-shadow: 0 0 0 0 rgba(0,140,100,.35); }
+        50%      { box-shadow: 0 0 0 10px rgba(0,140,100,0); }
+      }
     }
 
     .btn-manual:active {
       transform: scale(0.96);
     }
 
+    /* ─── FOOTER ─────────────────────────────────────────────── */
     .footer {
       font-size: 0.65rem;
-      color: rgba(240,244,255,.2);
+      color: var(--footer-c);
       letter-spacing: 0.1em;
       text-transform: uppercase;
       margin-top: 2.2rem;
@@ -407,17 +505,22 @@
 
   <script>
     const APP_URL = "https://pkanetcloud.streamlit.app/";
-    const TIMEOUT = 8000;
+    const TIMEOUT  = 8000;
     const FALLBACK = 9000;
 
     let redirected = false;
 
-    const colors = ['#00f5c4', '#ff6eb4', '#ffe660', '#60b4ff', '#ff9f43', '#c084fc'];
+    // Particle colors adapt to system theme
+    const dark  = ['#00f5c4','#ff6eb4','#ffe660','#60b4ff','#ff9f43','#c084fc'];
+    const light = ['#00b38a','#e03a8c','#c87c00','#2563c4','#d06a00','#8b3fc8'];
+    const isLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+    const colors = isLight ? light : dark;
+
     const pCont = document.getElementById('particles');
 
     for (let i = 0; i < 22; i++) {
-      const d = document.createElement('div');
-      const sz = Math.random() * 7 + 4;
+      const d   = document.createElement('div');
+      const sz  = Math.random() * 7 + 4;
       const col = colors[Math.floor(Math.random() * colors.length)];
       const dur = Math.random() * 12 + 8;
       const del = Math.random() * 14;
@@ -425,23 +528,30 @@
 
       d.className = 'p';
       d.style.cssText = `
-        width:${sz}px;
-        height:${sz}px;
+        width:${sz}px;height:${sz}px;
         background:${col};
-        left:${lft}%;
-        bottom:-20px;
+        left:${lft}%;bottom:-20px;
         animation-duration:${dur}s;
         animation-delay:${del}s;
+        opacity:${isLight ? 0.5 : 1};
       `;
       pCont.appendChild(d);
     }
 
-    const fillEl = document.getElementById('progressFill');
+    // Re-tint particles if user changes OS theme mid-session
+    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
+      const next = e.matches ? light : dark;
+      pCont.querySelectorAll('.p').forEach(p => {
+        p.style.background = next[Math.floor(Math.random() * next.length)];
+      });
+    });
+
+    const fillEl   = document.getElementById('progressFill');
     const bubbleEl = document.getElementById('statusBubble');
-    const textEl = document.getElementById('statusText');
-    const cdWrap = document.getElementById('countdownWrap');
-    const fallBtn = document.getElementById('fallbackBtn');
-    const metaEl = document.getElementById('metaLine');
+    const textEl   = document.getElementById('statusText');
+    const cdWrap   = document.getElementById('countdownWrap');
+    const fallBtn  = document.getElementById('fallbackBtn');
+    const metaEl   = document.getElementById('metaLine');
 
     const funMessages = [
       'Warming up the lab… 🔬',
@@ -452,21 +562,16 @@
     ];
 
     let msgIdx = 0;
-
     const msgTimer = setInterval(() => {
       msgIdx = (msgIdx + 1) % funMessages.length;
-
       if (!bubbleEl.classList.contains('ready') && !bubbleEl.classList.contains('warn')) {
         textEl.textContent = funMessages[msgIdx];
       }
     }, 1800);
 
-    function setProgress(pct) {
-      fillEl.style.width = pct + '%';
-    }
+    function setProgress(pct) { fillEl.style.width = pct + '%'; }
 
     let fakeP = 0;
-
     const fakeTimer = setInterval(() => {
       fakeP = Math.min(fakeP + Math.random() * 5 + 1, 85);
       setProgress(fakeP);
@@ -474,17 +579,14 @@
 
     function doLaunch() {
       if (redirected) return;
-
       redirected = true;
 
       clearInterval(fakeTimer);
       clearInterval(msgTimer);
-
       setProgress(100);
       fallBtn.style.display = 'none';
 
       let n = 3;
-
       function tick() {
         if (n > 0) {
           cdWrap.innerHTML = `
@@ -500,17 +602,13 @@
             </span>
           `;
           metaEl.textContent = 'Powered by Streamlit';
-
-          setTimeout(() => {
-            window.location.href = APP_URL;
-          }, 350);
+          setTimeout(() => { window.location.href = APP_URL; }, 350);
         }
       }
-
       tick();
     }
 
-    const ctrl = new AbortController();
+    const ctrl  = new AbortController();
     const pTimer = setTimeout(() => ctrl.abort(), TIMEOUT);
 
     fetch(APP_URL, { mode: 'no-cors', signal: ctrl.signal })
@@ -521,7 +619,6 @@
 
         bubbleEl.classList.add('ready');
         textEl.textContent = "✅ Server online — let's go!";
-
         setTimeout(doLaunch, 700);
       })
       .catch(() => {
@@ -531,17 +628,11 @@
 
         bubbleEl.classList.add('warn');
         textEl.textContent = '⚠️ Server waking up… redirecting!';
-
         setTimeout(doLaunch, 800);
       });
 
-    setTimeout(() => {
-      if (!redirected) doLaunch();
-    }, FALLBACK);
-
-    setTimeout(() => {
-      if (!redirected) fallBtn.style.display = 'inline-block';
-    }, 5000);
+    setTimeout(() => { if (!redirected) doLaunch(); }, FALLBACK);
+    setTimeout(() => { if (!redirected) fallBtn.style.display = 'inline-block'; }, 5000);
   </script>
 </body>
 </html>
