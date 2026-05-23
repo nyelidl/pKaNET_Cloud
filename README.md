@@ -261,8 +261,6 @@ This tool builds on:
 
 If you use pKaNET Cloud+ in your work, please cite:
 
-> Hengphasatporn, K. et al. *pKaNET Cloud+: Tautomer-aware protonation-state ranking for docking-ready ligand preparation.* Manuscript in preparation.
-
 > Hengphasatporn, K. et al. DFDD: A Cloud-Ready Tool for Distance-Guided Fully Dynamic Docking in Host–Guest Complexation, *Journal of Chemical Information and Modeling* **2026**, 66, 1955-1963. DOI: 10.1021/acs.jcim.5c02852. 
 
 For the pKaHub benchmark reference dataset, cite:
