@@ -710,14 +710,14 @@ if run_btn:
                         )
                     with col2:
                         zip_sel = tmp / "structures.zip"
-                        zip_minimized_structures(str(out_dir_path), str(zip_sel), output_formats)
-                        label = (f"🧬 Download {output_formats[0]} files (ZIP)"
+                        zip_minimized_structures(str(out_dir_path), str(zip_sel), output_formats, rank_only=1)
+                        label = (f"🧬 Download {output_formats[0]} files \u2013 Rank 1 (ZIP)"
                                  if len(output_formats) == 1
-                                 else f"🧬 Download {' + '.join(output_formats)} (ZIP)")
+                                 else f"🧬 Download {' + '.join(output_formats)} \u2013 Rank 1 (ZIP)")
                         st.download_button(
                             label,
                             data=zip_sel.read_bytes(),
-                            file_name=f"pkanet_{'_'.join(f.lower() for f in output_formats)}.zip",
+                            file_name=f"pkanet_rank1_{'_'.join(f.lower() for f in output_formats)}.zip",
                             mime="application/zip",
                             use_container_width=True,
                         )
