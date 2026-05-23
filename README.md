@@ -1,4 +1,5 @@
 # <img src="https://github.com/nyelidl/pKaNET_Cloud/blob/f0f6f2f1276a9c6d027810a54b2e2c3c2f861315/pKaN.svg" width="60"> pKaNET Cloud+ — Tautomer-Aware Protonation Engine
+
 ### *Heuristic microstate ranking · pH-adjusted SMILES · 3D structure generation · Google Colab & Streamlit*
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/16oz3jR6gWOzaSaJImlVflPkgT8eTcfTi?usp=sharing)
@@ -10,107 +11,170 @@
 
 ## 🔍 What This Tool Does
 
-pKaNET Cloud determines the **dominant docking-relevant protonation state** of a small molecule at a user-defined pH using a tautomer-aware Henderson-Hasselbalch microstate ranking engine.
+pKaNET Cloud+ determines the **dominant docking-relevant protonation state** of a small molecule at a user-defined pH using a tautomer-aware Henderson–Hasselbalch microstate-ranking workflow.
 
-- Identifies all ionizable sites via a corrected SMARTS-based pKa table
-- Enumerates tautomers and filters implausible forms
-- Ranks microstates using an 8-component Henderson-Hasselbalch scoring function
-- Optionally queries **PubChem** for experimental pKa evidence
-- Returns the dominant microspecies as a **pH-adjusted SMILES** with formal charge
-- Builds and minimizes a **3D structure** (ETKDG → MMFF → UFF fallback)
-- Exports **PDB** and **SDF** formats ready for docking or parameterization
+The workflow is designed for ligand preparation before molecular docking, molecular mechanics parameterisation, and cheminformatics dataset curation.
+
+Main functions:
+
+- Identifies ionisable sites using a calibrated SMARTS-based heuristic pKa table with context-aware rules for over 50 functional-group classes.
+- Uses Dimorphite-DL-assisted ionisation-state enumeration, followed by pKaNET Cloud+ tautomer-aware microstate filtering and re-ranking.
+- Ranks candidate microstates using a Henderson–Hasselbalch-inspired scoring function with multi-site charge-cap logic.
+- Optionally queries **PubChem** for experimental dissociation-constant evidence when available.
+- Returns the dominant microspecies as a **pH-adjusted SMILES** with formal charge.
+- Provides a fast sub-millisecond `heuristic_net_charge()` path and a smart `predict_charge(mode='auto')` dispatcher for large-scale screening.
+- Builds and minimises a 3D ligand structure using ETKDG followed by MMFF optimisation, with UFF fallback.
+- Exports docking- and parameterisation-ready **PDB** and **SDF** files.
 
 ---
 
 ## 📦 Dependencies
 
 | Library | Required | Purpose |
-|---|---|---|
-| `rdkit` | ✅ required | Substructure matching, tautomer enumeration, 3D structure generation |
-| `dimorphite-dl` | ✅ required | Ionization-state enumeration (primary enumerator) |
-| `requests` | ⚙️ optional | PubChem experimental pKa lookup |
-| `pkasolver` | ⚙️ optional | ML GNN pKa backend (improves accuracy when available) |
-| `propka` | ⚙️ optional | Semi-empirical pKa backend (fallback when pkasolver absent) |
+|---|---:|---|
+| `rdkit` | ✅ required | SMARTS matching, molecule standardisation, tautomer handling, formal charge assignment, 3D conformer generation, and geometry optimisation |
+| `dimorphite-dl` | ✅ required | Initial ionisation-state enumeration; pKaNET Cloud+ re-ranks the generated microstates using its heuristic pKa scoring model |
+| `requests` | ⚙️ optional | PubChem experimental pKa / dissociation-constant lookup |
+| `pkasolver` | ⚙️ optional | Optional ML-GNN pKa backend when available |
+| `propka` | ⚙️ optional | Optional semi-empirical pKa backend or fallback |
 
-> **Note:** `py3Dmol` for 3D visualization is used in the accompanying **Colab notebook** but is not part of `pKaNET.py` itself.
-
----
-
-## ✅ v68 Bug Fixes (2026-05)
-
-This release corrects systematic errors in the ionizable-site heuristic table that caused wrong protonation states for several common pharmacophores:
-
-| Bug | Old behaviour | Fixed behaviour |
-|---|---|---|
-| Imidazole N-H pKa | pKa = 6.0 (base pKa used as acid pKa) → **[n−] at pH 7.4** | pKa = 14.0 → **neutral at pH 7.4** |
-| Benzimidazole N-H pKa | pKa = 5.5 (base pKa used as acid pKa) → [n−] at pH 7.4 | pKa = 13.0 → neutral at pH 7.4 |
-| Phosphonate double-counting | pKa₁ and pKa₂ sites counted twice | Deduplicated |
-| Thiol aliphatic pKa | pKa = 10.5 | pKa = 9.8 |
-| Thiol α-amino pKa | Missing entry | Added: pKa = 8.3 |
-| Hydroxamic acid | Missing entry | Added |
-| Phosphate diester | Wrong label and pKa | Corrected |
-| Catechol-OH priority | Unordered | Fixed selection priority |
-| Amine α-EWG | Missing entry | Added: pKa = 7.5 |
-| New entries | — | sulfonyl_imide_NH, enol_lactone, enol_cyclic_dicarbonyl, enol_1_3_dicarbonyl, pyrazole_NH, indole_NH, aliphatic_imine |
-| Imidazole SMARTS | `c1cn[nH]c1` matched pyrazole, not imidazole | `[nH]1ccnc1` correctly matches imidazole |
-
-**Specific case confirmed fixed:** imidazole at pH 7.4 → rank-1 score +2.30 (neutral) vs −0.95 ([n−]); score margin = 3.25 units.
+> `py3Dmol` is used only in the accompanying Colab notebook or visualisation interface. It is not required by the core `pKaNET.py` engine.
 
 ---
 
-## 📊 Benchmark — pKaHub Validation (v68)
+## 🧪 Internal Regression Test Suite
 
-pKaNET v68 was benchmarked against a docking-relevant subset of the **pKaHub** experimental pKa database (Sipos-Szabó et al., *J. Chem. Inf. Model.* 2026, 66, 4607–4619), which provides over 90,000 experimental aqueous pKa values annotated with macroscopic charge-state transitions.
+The internal regression suite contains **65 chemically curated test cases** across 12 functional-group classes.
 
-**Benchmark endpoint:** net-charge agreement at pH 7.4 — whether pKaNET predicts the same dominant net charge as the pKaHub-derived reference annotation. This is **not** a numerical pKa MAE/RMSE benchmark.
+### How to run
+
+```bash
+python3 test_pkanet.py pKaNET.py          # full suite
+python3 test_pkanet.py pKaNET.py G8       # flavonoid group only
+python3 test_pkanet.py pKaNET.py G12      # drug regression panel only
+```
+
+**65 / 65 PASS (100%)**
+
+| Group | Description | Pass | Fail | Status |
+|---|---|---:|---:|---|
+| G1 | Imidazole-type N-H | 10 | 0 | ✅ |
+| G2 | Phosphonate / phosphate | 7 | 0 | ✅ |
+| G3 | Thiol ArSH / AlkSH | 5 | 0 | ✅ |
+| G4 | Carboxylic acid | 5 | 0 | ✅ |
+| G5 | Phenol variants, including warfarin enol acid | 6 | 0 | ✅ |
+| G6 | Amine bases | 5 | 0 | ✅ |
+| G7 | Sulfonamide / saccharin | 4 | 0 | ✅ |
+| G8 | Flavonoid regression — must not change | 4 | 0 | ✅ |
+| G9 | Zwitterion / multi-site | 5 | 0 | ✅ |
+| G10 | PubChem pKa guard | 3 | 0 | ✅ |
+| G11 | Truly neutral | 4 | 0 | ✅ |
+| G12 | Drug regression panel | 7 | 0 | ✅ |
+| **Total** |  | **65** | **0** | ✅ |
+
+---
+
+## 📊 External Benchmark — pKaHub-Derived Validation Subset
+
+pKaNET Cloud+ was benchmarked against a docking-relevant subset derived from **pKaHub**, an experimental aqueous pKa database with macroscopic charge-state transition annotations.
+
+### Benchmark Endpoint
+
+The benchmark endpoint is **net-charge agreement at pH 7.4**. This checks whether pKaNET Cloud+ predicts the same dominant net formal charge as the pKaHub-derived reference annotation at physiological pH.
+
+This benchmark is **not** a numerical pKa prediction benchmark. The reported agreement values must not be interpreted as pKa MAE, RMSE, or quantitative pKa accuracy.
+
+### Drug-Like Screening Criteria
+
+The validation subset was selected from a combined unified dataset by applying drug-like / small-molecule criteria.
+
+| Property | Threshold |
+|---|---|
+| Molecular weight | 100–600 Da |
+| H-bond donors | ≤ 7 |
+| H-bond acceptors | ≤ 12 |
+| logP | −3 to +6.5 |
+| TPSA | ≤ 180 Å² |
+| Rotatable bonds | ≤ 15 |
+| Heavy atoms | ≥ 7 |
+
+From 38,724 unique SMILES, 35,872 passed these criteria. The final validation subset contained 27,218 molecules prioritised for interpretable charge-state annotation and experimental pKa availability.
 
 ### Overall Results
 
-| Version | Agreement | % |
-|---|---|---|
-| pKaNET v67 | 18,298 / 27,218 | 67.23% |
-| **pKaNET v68** | **19,216 / 27,218** | **70.60%** |
+| Dataset | Correct | Total with reference annotation | Agreement rate |
+|---|---:|---:|---:|
+| 65-case curated regression set | 65 | 65 | **100.00%** |
+| pKaHub-derived validation subset | 18,850 | 27,183 | **69.34%** |
 
-Version changes: +1,124 improved, −206 regressed (net improvement +918 cases).
+### Agreement by Expected Charge State at pH 7.4
 
-### Results by Molecular Complexity
-
-| Class | n | v68 agree | v68 agree % | v68 disagree % |
-|---|---|---|---|---|
-| Monoprotic | 19,537 | 14,652 | **75.00%** | 25.00% |
-| Amphoteric | 1,914 | 1,485 | **77.58%** | 22.42% |
-| Polyprotic / complex | 5,767 | 3,079 | **53.39%** | 46.61% |
+| Expected charge | Count | Correct | Agreement |
+|---:|---:|---:|---:|
+| −4 | 7 | 1 | 14.3% |
+| −3 | 84 | 14 | 16.7% |
+| −2 | 694 | 310 | 44.7% |
+| −1 | 7,495 | 4,321 | 57.7% |
+| 0 | 12,146 | 9,240 | 76.1% |
+| +1 | 6,386 | 4,923 | 77.1% |
+| +2 | 309 | 41 | 13.3% |
+| +3 or above | 62 | 0 | 0.0% |
 
 ### Interpretation
 
-For monoprotic drug-like molecules — the most common case in lead optimization — 3 in 4 compounds receive the correct dominant net charge at physiological pH. Agreement is lower for polyprotic and zwitterionic molecules, consistent with the known limitations of heuristic Henderson-Hasselbalch models when multiple ionization equilibria compete. Remaining disagreements (8,002 cases, 29.40%) are concentrated in this structurally complex class and in borderline cases where at least one ionizable site has a predicted pKa within ±1 unit of pH 7.4 (n = 1,250; 15.6% of failures).
+For monoprotic drug-like molecules, which represent the majority of practical lead-optimisation cases, pKaNET Cloud+ assigns the same dominant net charge as the pKaHub-derived reference annotation for approximately three out of four compounds. Agreement is highest for neutral molecules (76.1%) and monocations (77.1%), and lower for polyprotic and zwitterionic molecules, as expected.
 
-### Benchmark Files
-
-| File | Description |
-|---|---|
-| `pKaNET_pKahub_docking_relevant_subset_validation_v68.csv` | Full validation set (27,218 molecules) |
-| `pKaNET_pKahub_docking_relevant_failed_cases_v68.csv` | v68 disagreement cases (8,002 molecules) |
-
-Each row includes `molid`, `smiles`, `pkahub_charge`, `pkanet_v67_charge`, `pkanet_v68_charge`, `agreement_v67`, `agreement_v68`, `transition_class`, `pkanet_v68_site_count`, and `pkanet_v68_site_decisions` (semicolon-delimited list of detected site labels, heuristic pKa values, and site types).
-
-### Limitations
-
-- The pKaHub reference is macroscopic; for polyprotic molecules the dominant net charge may differ from what any single-site model predicts.
-- No ML pKa backend is used; all predictions rely on the heuristic ionizable-site SMARTS table.
-- Flavonoid 7-OH assignments are borderline at pH 7.4 (heuristic pKa ≈ 7.0; literature range 6.5–7.5).
-- Agreement does not guarantee correct identification of the specific ionized atom, only that the overall net charge matches.
+The 8,333 disagreements (30.66%) are concentrated in molecules where at least one predicted ionisable site has a heuristic pKa within ±1.5 units of pH 7.4 and in strongly polyprotic species with charge magnitude ≥ 2, where multi-site pKa ordering is not recoverable from the heuristic table alone. The dominant failure modes are single-step over-prediction of basicity and single-step over-prediction of acidity.
 
 ---
 
-## 📥 Supported Inputs
+## ⚡ Public API
+
+Three public functions are available for programmatic and large-scale use:
+
+```python
+# Sub-millisecond heuristic estimate with multi-site charge caps
+charge = core.heuristic_net_charge("CC(=O)O", ph=7.4)          # → −1
+
+# Smart dispatcher: fast normally, full pipeline for borderline pKa or tautomeric risk
+charge, mode = core.predict_charge("CC(=O)O", ph=7.4, mode="auto")
+
+# Batch prediction — returns a pandas DataFrame
+df = core.batch_predict_charges(["CC(=O)O", "CN", "NCC(=O)O"], ph=7.4, mode="auto")
+```
+
+`predict_charge(mode='auto')` automatically escalates to the full tautomer + Dimorphite-DL + scoring pipeline when:
+
+- any detected site pKa is within 1.5 pH units of the target, or
+- the molecule has ring systems but no detectable ionisable sites on the parent form, indicating tautomeric enol risk, such as warfarin supplied as the keto form.
+
+The `heuristic_net_charge()` function applies two charge-cap rules that suppress systematic over-charging in the fast path: a **polyamine cap** and a **multi-acid cap**.
+
+---
+
+## 🗂️ Benchmark Files
+
+| File | Description |
+|---|---|
+| `pKaNET_pKahub_docking_relevant_subset_validation.csv` | Curated validation subset with pKaHub-derived reference charge labels and pKaNET predictions |
+| `pKaNET_pKahub_docking_relevant_failed_cases.csv` | Disagreement cases for manual review and future rule refinement |
+| `curated_regression_set.csv` | Internal 65-compound chemically curated regression set |
+| `validation_pass.csv` | Molecules with correct net-charge assignment |
+| `validation_fail.csv` | Disagreement cases |
+| `validation_summary_template.csv` | Template for recording new validation outputs |
+| `failed_cases_review_template.csv` | Template for manually classifying disagreement cases |
+
+---
+
+## 🧬 Supported Inputs
 
 | Format | Extension |
 |---|---|
 | SMILES | `.smi` or plain text |
-| MDL Molfile | `.mol`, `.sdf` |
+| MDL Molfile | `.mol` |
+| Structure-data file | `.sdf` |
 | Tripos Mol2 | `.mol2` |
-| Protein Data Bank | `.pdb` |
+| Protein Data Bank ligand | `.pdb` |
 
 ---
 
@@ -118,35 +182,65 @@ Each row includes `molid`, `smiles`, `pkahub_charge`, `pkanet_v67_charge`, `pkan
 
 | Output | Description |
 |---|---|
-| pH-adjusted SMILES | Dominant microspecies at target pH |
-| Predicted net formal charge | Integer charge at target pH |
-| `minimized_ligand.pdb` | 3D structure with MMFF-minimized geometry |
-| `minimized_ligand.sdf` | 3D structure with explicit H (correct rendering in py3Dmol) |
-| Preparation log | Site-level decisions and pKa evidence |
+| pH-adjusted SMILES | Dominant predicted microspecies at the target pH |
+| Net formal charge | Integer formal charge of the selected microspecies |
+| `minimized_ligand.pdb` | 3D ligand structure after geometry minimisation |
+| `minimized_ligand.sdf` | 3D ligand structure with explicit hydrogens and formal charge |
+| Preparation log | Site-level protonation decisions, pKa evidence, and ranking information |
 
 ---
 
-## 🎯 Ideal For
+## 🎯 Intended Use Cases
 
-- Ligand preparation prior to **molecular docking** (AutoDock Vina, Glide, GOLD, rDock)
-- **GAFF2 / CGenFF** force-field parameterization
-- **QSAR / ADMET** dataset curation
-- **Virtual screening** library protonation
-- Teaching **pKa and microspecies** concepts in drug design courses
+- Ligand preparation before **molecular docking** with AutoDock Vina, VinaXB, GNINA, Glide, GOLD, or rDock.
+- **GAFF2**, **CGenFF**, or other force-field parameterisation workflows.
+- **QSAR**, **ADMET**, and virtual-screening dataset curation.
+- Teaching pKa, protonation state, microspecies, and docking-preparation concepts.
 
 ---
 
-## 🔗 Integration
+## 🔗 Integration with Anyone Can Dock
 
-pKaNET v68 is the **default protonation engine** in the [Anyone Can Dock](https://anyonecandock.streamlit.app/) web application, replacing the previous Dimorphite-DL-based pipeline. It is called via `protonate_pkanet()` in `core.py` and can be loaded standalone by placing `pKaNET.py` in the same directory.
+pKaNET Cloud+ is the default protonation engine in the [Anyone Can Dock](https://anyonecandock.streamlit.app/) web application, replacing the previous Dimorphite-DL-only pipeline.
+
+```python
+protonate_pkanet()
+```
+
+```text
+input ligand → standardisation → Dimorphite-DL enumeration →
+pKaNET Cloud+ ranking → dominant microspecies → 3D generation →
+minimisation → docking-ready output
+```
 
 ---
 
 ## ⚠️ Important Notes
 
-- pKaNET uses a **heuristic pKa table**, not a trained ML model. Predictions are based on SMARTS pattern matching and Henderson-Hasselbalch scoring.
-- For borderline cases (site pKa within ±1 unit of target pH), the predicted charge should be treated as uncertain.
-- Do not use pKaNET output pKa values as quantitative experimental pKa estimates; the heuristic values are calibrated for charge-state selection, not numerical accuracy.
+- pKaNET Cloud+ uses a calibrated heuristic pKa table and microstate-ranking workflow, not a quantitative experimental pKa predictor.
+- For borderline cases where one or more predicted site pKa values fall within ±1.5 units of the target pH, the predicted charge should be treated as uncertain. Use `predict_charge(mode='auto')` to escalate these cases automatically to the full pipeline.
+- `heuristic_net_charge()` returns charge 0 for keto-form warfarin input because no OH group is detectable on the parent form; `predict_charge(mode='auto')` escalates to the full pipeline and returns −1.
+- Net-charge agreement does not guarantee that the exact ionised atom or tautomer is correct, especially for polyprotic or zwitterionic molecules.
+- The pKaHub-derived benchmark subset is a curated validation subset, not a redistribution of the complete raw pKaHub database.
+- In the G12 drug regression panel, Gefitinib and Imatinib are assigned as +1, whereas Erlotinib and Osimertinib are assigned as neutral. EGFR inhibitors should be evaluated compound by compound rather than assigned a uniform charge class.
+- The 65-case internal regression suite was run with Dimorphite-DL active. The large pKaHub-derived benchmark used the fast charge-estimation path. Using `predict_charge(mode='auto')` for the full benchmark may further improve agreement for borderline and polyprotic cases, at the cost of longer run time.
+
+---
+
+## ✅ Recommended Wording for Manuscript or ESI
+
+> The protonation-state assignment module of pKaNET Cloud+ was evaluated using an internal chemically curated regression set (65 molecules, 100% net-charge agreement at pH 7.4) and a drug-like subset derived from the pKaHub experimental pKa database (27,218 molecules, 69.34% net-charge agreement at pH 7.4; Sipos-Szabó et al.). The benchmark endpoint was dominant net-charge agreement at pH 7.4, not numerical pKa prediction accuracy. The pKaHub-derived benchmark subset was curated to retain molecules with interpretable macroscopic charge-state annotations relevant to ligand docking. The complete raw pKaHub database was not redistributed; only curated validation outputs and disagreement summaries were provided for reproducibility. Full benchmark data and extended ligand preparation methodology are provided in the Supporting Information.
+
+---
+
+## 🚫 Wording to Avoid
+
+| Avoid | Use instead |
+|---|---|
+| "pKaNET pKa accuracy is 69.34%" | "pKaNET net-charge agreement at pH 7.4 is 69.34%" |
+| "pKaNET predicts pKa correctly" | "pKaNET assigns the correct dominant net charge" |
+| "Fully validated against experimental data" | "Benchmarked against pKaHub-derived charge-state annotations" |
+| "All imidazole cases are fixed" | "The reported imidazole N-H deprotonation issue is resolved in the regression set; residual failures may remain for complex imidazole-containing molecules" |
 
 ---
 
@@ -154,25 +248,29 @@ pKaNET v68 is the **default protonation engine** in the [Anyone Can Dock](https:
 
 This tool builds on:
 
-- **[RDKit](https://www.rdkit.org/)** — SMARTS-based substructure matching, tautomer enumeration (EnumerateStereoisomers), standardization (rdMolStandardize), ETKDGv3 conformer generation, and MMFF geometry optimization.
-- **[Dimorphite-DL](https://github.com/rdkit/Dimorphite-DL)** (Ropp et al., *J. Cheminformatics* 2019, 11, 14) — used as the primary ionization-state enumerator inside `generate_ranked_microstates`. The heuristic pKa table in pKaNET independently scores and re-ranks the enumerated states.
-- **[pKaSolver](https://github.com/mayrf/pkasolver)** (Mayr et al., *Front. Chem.* 2022) — optional ML GNN backend; when installed, provides graph-neural-network pKa estimates to augment heuristic scoring.
-- **[PROPKA](https://github.com/jensengroup/propka)** (Olsson et al.) — optional semi-empirical backend; used as fallback when pKaSolver is unavailable.
-- **[requests](https://requests.readthedocs.io/)** — optional HTTP client for PubChem dissociation-constant lookup.
-- **[pKaHub](http://pkahub.ttk.hu)** (Sipos-Szabó, Bajusz, Balogh, Keserű, *J. Chem. Inf. Model.* 2026, 66, 4607–4619) — benchmark reference dataset providing experimental pKa values with macroscopic charge-state transition annotations.
+- **[RDKit](https://www.rdkit.org/)** — molecule standardisation, SMARTS matching, tautomer handling, formal charge assignment, ETKDG conformer generation, and MMFF/UFF geometry optimisation.
+- **[Dimorphite-DL](https://github.com/rdkit/Dimorphite-DL)** — initial ionisation-state enumeration; pKaNET Cloud+ performs independent re-ranking.
+- **[pKaSolver](https://github.com/mayrf/pkasolver)** — optional ML-GNN pKa backend.
+- **[PROPKA](https://github.com/jensengroup/propka)** — optional semi-empirical pKa backend or fallback.
+- **[requests](https://requests.readthedocs.io/)** — optional HTTP client for PubChem lookup.
+- **[pKaHub](http://pkahub.ttk.hu)** — external experimental pKa reference resource used to derive the docking-relevant benchmark subset.
 
 ---
 
 ## 📖 Citation
 
-If you use pKaNET Cloud in your work, please cite:
+If you use pKaNET Cloud+ in your work, please cite:
 
-> Hengphasatporn, K. et al. *pKaNET Cloud: Tautomer-aware protonation-state ranking for docking-ready ligand preparation.* [manuscript in preparation]
+> Hengphasatporn, K. et al. *pKaNET Cloud+: Tautomer-aware protonation-state ranking for docking-ready ligand preparation.* Manuscript in preparation.
 
-For the benchmark reference dataset:
+> Hengphasatporn, K. et al. DFDD: A Cloud-Ready Tool for Distance-Guided Fully Dynamic Docking in Host–Guest Complexation, *Journal of Chemical Information and Modeling* **2026**, 66, 1955-1963. DOI: 10.1021/acs.jcim.5c02852. 
 
-> Sipos-Szabó, L.; Bajusz, D.; Balogh, G. T.; Keserű, G. M. Benchmarking pKa Prediction Algorithms against an Extensive, Public Data Set. *J. Chem. Inf. Model.* **2026**, 66, 4607–4619. DOI: [10.1021/acs.jcim.6c00107](https://doi.org/10.1021/acs.jcim.6c00107)
+For the pKaHub benchmark reference dataset, cite:
+
+> Sipos-Szabó, L.; Bajusz, D.; Balogh, G. T.; Keserű, G. M. Benchmarking pKa Prediction Algorithms against an Extensive, Public Data Set. *Journal of Chemical Information and Modeling* **2026**, 66, 4607–4619. DOI: 10.1021/acs.jcim.6c00107.
 
 ---
 
-*This code is part of the DFDD project.*
+## 📌 Project Context
+
+pKaNET Cloud+ is developed as part of the ligand-preparation workflow for Anyone Can Dock and related computational drug-discovery tools. The method improves docking-readiness by reducing common protonation-state errors caused by direct rule-based ionisation workflows, especially for imidazole-like motifs, flavonoids, phosphates/phosphonates, sulfonamide-like acids, zwitterions, warfarin-type enol acids, and drug-like polyprotic molecules.
