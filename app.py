@@ -62,8 +62,8 @@ st.markdown("""
 .main-header-wrap { text-align: center; }
 
 .main-header-logo {
-    width: 52px;
-    height: 52px;
+    width: 80px;
+    height: 80px;
     vertical-align: middle;
     margin-right: 0.4rem;
     margin-bottom: 0.3rem;
