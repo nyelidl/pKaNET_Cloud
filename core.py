@@ -1824,11 +1824,23 @@ def run_job(*, input_type, smiles_text, uploaded_bytes, uploaded_name, target_pH
 # ─────────────────────────────────────────────────────────────────────────────
 # ZIP helpers
 # ─────────────────────────────────────────────────────────────────────────────
-def zip_minimized_structures(out_dir, zip_path, selected_formats):
+def zip_minimized_structures(out_dir, zip_path, selected_formats, rank_only=None):
+    """Zip minimized structure files.
+
+    Parameters
+    ----------
+    out_dir         : output directory containing *_min.* files
+    zip_path        : destination ZIP path
+    selected_formats: list of format strings, e.g. ["PDB", "MOL2"]
+    rank_only       : if set to an integer (e.g. 1), only include files whose
+                      name contains ``_micro{rank_only}_`` (e.g. rank 1 only)
+    """
     out = Path(out_dir); zp = Path(zip_path)
     fmts = [f.lower() for f in selected_formats]
     with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
         for p in out.glob("*_min.*"):
+            if rank_only is not None and f"_micro{rank_only}_" not in p.name:
+                continue
             s = p.suffix.lower()
             if (s == ".pdb" and "pdb" in fmts) or (s == ".mol2" and "mol2" in fmts):
                 z.write(p, arcname=p.name)
