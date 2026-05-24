@@ -372,7 +372,7 @@
 
     <div class="a2hs-header">
       <div class="a2hs-icon">
-        <img src="pKaN2.svg" alt="" aria-hidden="true" />
+        <img src="pKaNi.png" alt="" aria-hidden="true" />
       </div>
       <div class="a2hs-title-block">
         <div class="a2hs-title">Add pKaNET Cloud+</div>
@@ -648,16 +648,16 @@
         } catch (e) {
           // Cross-origin canvas taint — fall back to raw SVG
           // (won't work on iOS but harmless)
-          document.getElementById('appleTouchIcon').href = 'pKaN2.svg';
+          document.getElementById('appleTouchIcon').href = 'pKaNi.png';
         }
       };
       img.onerror = function () {
         // SVG load failed — nothing we can do
-        document.getElementById('appleTouchIcon').href = 'pKaN2.svg';
+        document.getElementById('appleTouchIcon').href = 'pKaNi.png';
       };
       // Must set crossOrigin before src to avoid canvas taint for same-origin SVGs
       img.crossOrigin = 'anonymous';
-      img.src = 'pKaN2.svg';
+      img.src = 'pKaN1.png';
     })();
   </script>
 </body>
