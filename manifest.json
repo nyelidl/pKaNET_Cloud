@@ -1,0 +1,18 @@
+{
+  "name": "pKaNET Cloud+",
+  "short_name": "pKaNET",
+  "description": "Tautomer-aware pKa prediction with microstate ranking and pH-adjusted 3D structures.",
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0d0f1e",
+  "theme_color": "#0d0f1e",
+  "icons": [
+    {
+      "src": "pKaN2.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
