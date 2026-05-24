@@ -9,14 +9,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="pKaNET Cloud+" />
-  <!--
-    apple-touch-icon must be PNG — iOS ignores SVG.
-    We render pKaN2.svg onto a canvas at runtime and swap the href in.
-    The <link> is pre-inserted so Safari picks it up immediately after the
-    script runs (before the user taps "Add to Home Screen").
-  -->
-  <link id="appleTouchIcon" rel="apple-touch-icon" sizes="180x180" href="" />
-  <!-- Web App Manifest (Android / Chrome PWA) — SVG icons are fine here -->
+  <!-- PNG is required for iOS apple-touch-icon (SVG is ignored by Safari) -->
+  <link rel="apple-touch-icon" sizes="180x180" href="pKaNi.png" />
   <link rel="manifest" href="manifest.json" />
 
   <meta name="theme-color" content="#0d0f1e" media="(prefers-color-scheme: dark)" />
@@ -31,7 +25,6 @@
   <style>
     *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
 
-    /* ── TOKENS ─────────────────────────────────────────────── */
     :root {
       --font: 'Arial Rounded MT Bold','Arial Rounded MT','Nunito',sans-serif;
       --mint:   #00f5c4; --pink:   #ff6eb4; --yellow: #ffe660;
@@ -43,13 +36,9 @@
       --tag1-bg:rgba(0,245,196,.15);  --tag1-c:#00f5c4; --tag1-bd:rgba(0,245,196,.3);
       --tag2-bg:rgba(96,180,255,.15); --tag2-c:#60b4ff; --tag2-bd:rgba(96,180,255,.3);
       --tag3-bg:rgba(255,110,180,.15);--tag3-c:#ff6eb4; --tag3-bd:rgba(255,110,180,.3);
-      /* A2HS sheet */
-      --sheet-bg:  rgba(20,22,40,.92);
-      --sheet-bd:  rgba(255,255,255,.12);
-      --sheet-text:#f0f4ff;
-      --sheet-sub: rgba(240,244,255,.55);
-      --step-bg:   rgba(255,255,255,.07);
-      --step-bd:   rgba(255,255,255,.1);
+      --sheet-bg:  rgba(20,22,40,.92); --sheet-bd:  rgba(255,255,255,.12);
+      --sheet-text:#f0f4ff;           --sheet-sub: rgba(240,244,255,.55);
+      --step-bg:   rgba(255,255,255,.07); --step-bd: rgba(255,255,255,.1);
     }
 
     @media (prefers-color-scheme: light) {
@@ -60,12 +49,9 @@
         --tag1-bg:rgba(0,180,140,.12);  --tag1-c:#007f68; --tag1-bd:rgba(0,180,140,.35);
         --tag2-bg:rgba(50,140,230,.12); --tag2-c:#2563c4; --tag2-bd:rgba(50,140,230,.35);
         --tag3-bg:rgba(220,60,140,.12); --tag3-c:#b01870; --tag3-bd:rgba(220,60,140,.35);
-        --sheet-bg:  rgba(240,244,255,.96);
-        --sheet-bd:  rgba(26,29,58,.15);
-        --sheet-text:#1a1d3a;
-        --sheet-sub: rgba(26,29,58,.5);
-        --step-bg:   rgba(26,29,58,.06);
-        --step-bd:   rgba(26,29,58,.12);
+        --sheet-bg:rgba(240,244,255,.96); --sheet-bd:rgba(26,29,58,.15);
+        --sheet-text:#1a1d3a;           --sheet-sub:rgba(26,29,58,.5);
+        --step-bg:rgba(26,29,58,.06);   --step-bd:rgba(26,29,58,.12);
       }
     }
 
@@ -80,7 +66,6 @@
       transition:background .4s,color .4s;
     }
 
-    /* ── BLOBS ──────────────────────────────────────────────── */
     .blobs { position:fixed; inset:0; pointer-events:none; z-index:0; overflow:hidden; }
     .blob  { position:absolute; border-radius:50%; filter:blur(70px); opacity:var(--blob-op); animation:blobDrift linear infinite; }
     .blob:nth-child(1){width:340px;height:340px;background:var(--mint);  top:-80px;left:-60px;   animation-duration:18s;}
@@ -88,24 +73,18 @@
     .blob:nth-child(3){width:200px;height:200px;background:var(--yellow);top:40%;left:60%;        animation-duration:15s;animation-delay:-3s;}
     .blob:nth-child(4){width:180px;height:180px;background:var(--purple);top:60%;left:10%;        animation-duration:19s;animation-delay:-11s;}
     @keyframes blobDrift {
-      0%,100%{transform:translate(0,0) scale(1);}
-      25%    {transform:translate(30px,-20px) scale(1.08);}
-      50%    {transform:translate(-20px,30px) scale(0.95);}
-      75%    {transform:translate(20px,15px)  scale(1.05);}
+      0%,100%{transform:translate(0,0) scale(1);}  25%{transform:translate(30px,-20px) scale(1.08);}
+      50%    {transform:translate(-20px,30px) scale(0.95);} 75%{transform:translate(20px,15px) scale(1.05);}
     }
-    @media (prefers-color-scheme:light){ .blob{ filter:blur(80px) saturate(.7); } }
+    @media(prefers-color-scheme:light){ .blob{ filter:blur(80px) saturate(.7); } }
 
-    /* ── PARTICLES ──────────────────────────────────────────── */
     .particles{position:fixed;inset:0;pointer-events:none;z-index:0;}
     .p{position:absolute;border-radius:50%;animation:floatUp linear infinite;opacity:0;}
     @keyframes floatUp{
-      0%  {transform:translateY(0) rotate(0deg);  opacity:0;}
-      10% {opacity:.7;}
-      90% {opacity:.4;}
-      100%{transform:translateY(-100vh) rotate(360deg);opacity:0;}
+      0%{transform:translateY(0) rotate(0deg);opacity:0;} 10%{opacity:.7;}
+      90%{opacity:.4;} 100%{transform:translateY(-100vh) rotate(360deg);opacity:0;}
     }
 
-    /* ── CARD ───────────────────────────────────────────────── */
     .card{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;animation:bounceIn .8s cubic-bezier(.34,1.56,.64,1) both;}
     @keyframes bounceIn{from{opacity:0;transform:scale(.7) translateY(30px);}to{opacity:1;transform:scale(1) translateY(0);}}
 
@@ -113,10 +92,8 @@
       filter:drop-shadow(0 0 20px rgba(0,245,196,.45)) drop-shadow(0 0 40px rgba(192,132,252,.25));}
     @media(prefers-color-scheme:light){.logo{filter:drop-shadow(0 0 16px rgba(0,180,140,.35)) drop-shadow(0 0 32px rgba(150,80,220,.2));}}
     @keyframes logoWiggle{
-      0%,100%{transform:translateY(0)    rotate(-2deg) scale(1);}
-      25%    {transform:translateY(-10px) rotate(2deg)  scale(1.05);}
-      50%    {transform:translateY(-6px)  rotate(-1deg) scale(1.02);}
-      75%    {transform:translateY(-12px) rotate(3deg)  scale(1.06);}
+      0%,100%{transform:translateY(0)    rotate(-2deg) scale(1);}   25%{transform:translateY(-10px) rotate(2deg)  scale(1.05);}
+      50%    {transform:translateY(-6px) rotate(-1deg) scale(1.02);} 75%{transform:translateY(-12px) rotate(3deg)  scale(1.06);}
     }
 
     h1{font-size:2.2rem;font-weight:900;letter-spacing:-.01em;line-height:1.1;margin-bottom:.45rem;
@@ -174,167 +151,86 @@
 
     .footer{font-size:.65rem;color:var(--footer-c);letter-spacing:.1em;text-transform:uppercase;margin-top:2.2rem;}
 
-    /* ═══════════════════════════════════════════════════════════
+    /* ═══════════════════════════════════════════════════════
        ADD-TO-HOME-SCREEN SHEET
-    ═══════════════════════════════════════════════════════════ */
-    .a2hs-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 100;
-      /* tap outside to dismiss */
-      background: transparent;
-      display: none;
-    }
-    .a2hs-overlay.show { display: block; }
+    ═══════════════════════════════════════════════════════ */
+    .a2hs-overlay{position:fixed;inset:0;z-index:100;background:transparent;display:none;}
+    .a2hs-overlay.show{display:block;}
 
-    .a2hs-sheet {
-      position: fixed;
-      bottom: 0; left: 0; right: 0;
-      z-index: 101;
-      background: var(--sheet-bg);
-      border: 1px solid var(--sheet-bd);
-      border-radius: 28px 28px 0 0;
-      padding: 0 1.4rem calc(env(safe-area-inset-bottom, 0px) + 1.6rem);
-      backdrop-filter: blur(24px) saturate(1.6);
-      -webkit-backdrop-filter: blur(24px) saturate(1.6);
-      transform: translateY(110%);
-      transition: transform .45s cubic-bezier(.34,1.3,.64,1);
-      max-width: 480px;
-      margin: 0 auto;
-      /* shadow */
-      box-shadow: 0 -8px 40px rgba(0,0,0,.35), 0 0 0 .5px var(--sheet-bd);
+    .a2hs-sheet{
+      position:fixed;bottom:0;left:0;right:0;z-index:101;
+      background:var(--sheet-bg);
+      border:1px solid var(--sheet-bd);
+      border-radius:28px 28px 0 0;
+      padding:0 1.4rem calc(env(safe-area-inset-bottom,0px) + 1.6rem);
+      backdrop-filter:blur(24px) saturate(1.6);
+      -webkit-backdrop-filter:blur(24px) saturate(1.6);
+      transform:translateY(110%);
+      transition:transform .45s cubic-bezier(.34,1.3,.64,1);
+      max-width:480px; margin:0 auto;
+      box-shadow:0 -8px 40px rgba(0,0,0,.35), 0 0 0 .5px var(--sheet-bd);
     }
-    .a2hs-sheet.show { transform: translateY(0); }
+    .a2hs-sheet.show{transform:translateY(0);}
 
-    /* handle bar */
-    .a2hs-handle {
-      width: 40px; height: 5px;
-      background: rgba(128,128,160,.35);
-      border-radius: 999px;
-      margin: 12px auto 18px;
-    }
-
-    /* dismiss × */
-    .a2hs-close {
-      position: absolute;
-      top: 16px; right: 18px;
-      width: 30px; height: 30px;
-      border-radius: 50%;
-      background: rgba(128,128,160,.18);
-      border: none; cursor: pointer;
-      display: flex; align-items: center; justify-content: center;
-      color: var(--sheet-sub);
-      font-size: 1.1rem; line-height: 1;
-      transition: background .2s, transform .15s;
-    }
-    .a2hs-close:active { transform: scale(.88); background: rgba(128,128,160,.3); }
-
-    /* header row */
-    .a2hs-header {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-      margin-bottom: 1.2rem;
-    }
-    .a2hs-icon {
-      width: 56px; height: 56px;
-      border-radius: 14px;
-      flex-shrink: 0;
-      background: rgba(0,245,196,.12);
-      border: 1.5px solid rgba(0,245,196,.25);
-      display: flex; align-items: center; justify-content: center;
-      overflow: hidden;
-      box-shadow: 0 4px 16px rgba(0,245,196,.18);
-    }
-    .a2hs-icon img { width: 42px; height: 42px; object-fit: contain; }
-    .a2hs-title-block { text-align: left; }
-    .a2hs-title {
-      font-size: 1rem; font-weight: 900;
-      color: var(--sheet-text);
-      line-height: 1.2;
-    }
-    .a2hs-sub {
-      font-size: .7rem; color: var(--sheet-sub);
-      margin-top: .15rem;
-      font-weight: 700;
-    }
-
-    /* divider */
-    .a2hs-divider {
-      height: 1px;
-      background: var(--sheet-bd);
-      margin-bottom: 1.1rem;
-    }
-
-    /* steps */
-    .a2hs-steps {
-      display: flex;
-      flex-direction: column;
-      gap: .65rem;
-      margin-bottom: 1.3rem;
-    }
-    .a2hs-step {
-      display: flex;
-      align-items: center;
-      gap: .85rem;
-      background: var(--step-bg);
-      border: 1px solid var(--step-bd);
-      border-radius: 14px;
-      padding: .75rem 1rem;
-    }
-    .a2hs-step-num {
-      width: 26px; height: 26px; flex-shrink: 0;
-      border-radius: 50%;
-      background: linear-gradient(135deg,var(--mint),var(--blue));
-      display: flex; align-items: center; justify-content: center;
-      font-size: .72rem; font-weight: 900; color: #0d0f1e;
-    }
-    @media(prefers-color-scheme:light){
-      .a2hs-step-num { background:linear-gradient(135deg,#007f68,#2563c4); color:#fff; }
-    }
-    .a2hs-step-body { text-align: left; flex: 1; }
-    .a2hs-step-title {
-      font-size: .8rem; font-weight: 900; color: var(--sheet-text); line-height: 1.2;
-    }
-    .a2hs-step-desc {
-      font-size: .68rem; color: var(--sheet-sub); margin-top: .1rem; font-weight: 700;
-    }
-    .a2hs-step-icon {
-      flex-shrink: 0;
-      width: 28px; height: 28px;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .a2hs-step-icon svg { width: 22px; height: 22px; }
-
-    /* arrow pointing down to toolbar */
-    .a2hs-arrow {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: .3rem;
-      font-size: .65rem;
-      color: var(--sheet-sub);
-      letter-spacing: .06em;
-      text-transform: uppercase;
-      font-weight: 700;
-    }
-    .a2hs-arrow svg {
-      width: 20px; height: 20px;
-      animation: arrowBounce 1.2s ease-in-out infinite;
-    }
-    @keyframes arrowBounce{0%,100%{transform:translateY(0);}50%{transform:translateY(5px);}}
-
-    /* mint accent line at top of sheet */
-    .a2hs-sheet::before {
-      content:'';
-      display:block;
-      position:absolute;
+    .a2hs-sheet::before{
+      content:''; display:block; position:absolute;
       top:0; left:50%; transform:translateX(-50%);
       width:120px; height:2px;
       background:linear-gradient(90deg,transparent,var(--mint),transparent);
-      border-radius:0 0 4px 4px;
-      opacity:.6;
+      border-radius:0 0 4px 4px; opacity:.6;
     }
+
+    .a2hs-handle{width:40px;height:5px;background:rgba(128,128,160,.35);border-radius:999px;margin:12px auto 18px;}
+
+    .a2hs-close{
+      position:absolute;top:16px;right:18px;
+      width:30px;height:30px;border-radius:50%;
+      background:rgba(128,128,160,.18);border:none;cursor:pointer;
+      display:flex;align-items:center;justify-content:center;
+      color:var(--sheet-sub);font-size:1.1rem;line-height:1;
+      transition:background .2s,transform .15s;
+    }
+    .a2hs-close:active{transform:scale(.88);background:rgba(128,128,160,.3);}
+
+    .a2hs-header{display:flex;align-items:center;gap:1rem;margin-bottom:1.2rem;}
+    .a2hs-icon{
+      width:56px;height:56px;border-radius:14px;flex-shrink:0;
+      background:rgba(0,245,196,.12);border:1.5px solid rgba(0,245,196,.25);
+      display:flex;align-items:center;justify-content:center;
+      overflow:hidden;box-shadow:0 4px 16px rgba(0,245,196,.18);
+    }
+    .a2hs-icon img{width:42px;height:42px;object-fit:contain;}
+    .a2hs-title-block{text-align:left;}
+    .a2hs-title{font-size:1rem;font-weight:900;color:var(--sheet-text);line-height:1.2;}
+    .a2hs-sub{font-size:.7rem;color:var(--sheet-sub);margin-top:.15rem;font-weight:700;}
+
+    .a2hs-divider{height:1px;background:var(--sheet-bd);margin-bottom:1.1rem;}
+
+    .a2hs-steps{display:flex;flex-direction:column;gap:.65rem;margin-bottom:1.3rem;}
+    .a2hs-step{
+      display:flex;align-items:center;gap:.85rem;
+      background:var(--step-bg);border:1px solid var(--step-bd);
+      border-radius:14px;padding:.75rem 1rem;
+    }
+    .a2hs-step-num{
+      width:26px;height:26px;flex-shrink:0;border-radius:50%;
+      background:linear-gradient(135deg,var(--mint),var(--blue));
+      display:flex;align-items:center;justify-content:center;
+      font-size:.72rem;font-weight:900;color:#0d0f1e;
+    }
+    @media(prefers-color-scheme:light){.a2hs-step-num{background:linear-gradient(135deg,#007f68,#2563c4);color:#fff;}}
+    .a2hs-step-body{text-align:left;flex:1;}
+    .a2hs-step-title{font-size:.8rem;font-weight:900;color:var(--sheet-text);line-height:1.2;}
+    .a2hs-step-desc{font-size:.68rem;color:var(--sheet-sub);margin-top:.1rem;font-weight:700;}
+    .a2hs-step-icon{flex-shrink:0;width:28px;height:28px;display:flex;align-items:center;justify-content:center;}
+    .a2hs-step-icon svg{width:22px;height:22px;}
+
+    .a2hs-arrow{
+      display:flex;flex-direction:column;align-items:center;gap:.3rem;
+      font-size:.65rem;color:var(--sheet-sub);letter-spacing:.06em;text-transform:uppercase;font-weight:700;
+    }
+    .a2hs-arrow svg{width:20px;height:20px;animation:arrowBounce 1.2s ease-in-out infinite;}
+    @keyframes arrowBounce{0%,100%{transform:translateY(0);}50%{transform:translateY(5px);}}
   </style>
 </head>
 
@@ -363,7 +259,7 @@
     <p class="footer" id="metaLine">Powered by Streamlit</p>
   </main>
 
-  <!-- ── ADD-TO-HOME-SCREEN SHEET ─────────────────────────── -->
+  <!-- A2HS SHEET -->
   <div class="a2hs-overlay" id="a2hsOverlay" onclick="dismissA2HS()"></div>
 
   <div class="a2hs-sheet" id="a2hsSheet" role="dialog" aria-modal="true" aria-label="Add to Home Screen">
@@ -383,7 +279,6 @@
     <div class="a2hs-divider"></div>
 
     <div class="a2hs-steps">
-      <!-- Step 1 -->
       <div class="a2hs-step">
         <div class="a2hs-step-num">1</div>
         <div class="a2hs-step-body">
@@ -391,19 +286,14 @@
           <div class="a2hs-step-desc">In the Safari toolbar at the bottom</div>
         </div>
         <div class="a2hs-step-icon">
-          <!-- iOS Share icon -->
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-               stroke-linecap="round" stroke-linejoin="round"
-               style="color:var(--mint)">
-            <path d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342"/>
-            <path d="M12 5v9"/>
-            <polyline points="9 8 12 5 15 8"/>
+               stroke-linecap="round" stroke-linejoin="round" style="color:var(--mint)">
+            <path d="M12 2v13"/><polyline points="9 5 12 2 15 5"/>
             <path d="M5 12H3a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-2"/>
           </svg>
         </div>
       </div>
 
-      <!-- Step 2 -->
       <div class="a2hs-step">
         <div class="a2hs-step-num">2</div>
         <div class="a2hs-step-body">
@@ -411,18 +301,14 @@
           <div class="a2hs-step-desc">Scroll down in the share sheet if needed</div>
         </div>
         <div class="a2hs-step-icon">
-          <!-- Plus-in-square icon -->
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-               stroke-linecap="round" stroke-linejoin="round"
-               style="color:var(--blue)">
+               stroke-linecap="round" stroke-linejoin="round" style="color:var(--blue)">
             <rect x="3" y="3" width="18" height="18" rx="3"/>
-            <line x1="12" y1="8" x2="12" y2="16"/>
-            <line x1="8"  y1="12" x2="16" y2="12"/>
+            <line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>
           </svg>
         </div>
       </div>
 
-      <!-- Step 3 -->
       <div class="a2hs-step">
         <div class="a2hs-step-num">3</div>
         <div class="a2hs-step-body">
@@ -430,10 +316,8 @@
           <div class="a2hs-step-desc">The app icon will appear on your home screen</div>
         </div>
         <div class="a2hs-step-icon">
-          <!-- Checkmark icon -->
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-               stroke-linecap="round" stroke-linejoin="round"
-               style="color:var(--pink)">
+               stroke-linecap="round" stroke-linejoin="round" style="color:var(--pink)">
             <polyline points="20 6 9 17 4 12"/>
           </svg>
         </div>
@@ -443,49 +327,41 @@
     <div class="a2hs-arrow">
       <span>Safari toolbar below</span>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-           stroke-linecap="round" stroke-linejoin="round"
-           style="color:var(--mint)">
-        <line x1="12" y1="5" x2="12" y2="19"/>
-        <polyline points="19 12 12 19 5 12"/>
+           stroke-linecap="round" stroke-linejoin="round" style="color:var(--mint)">
+        <line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/>
       </svg>
     </div>
   </div>
 
   <script>
-    /* ── MAIN LAUNCH LOGIC ──────────────────────────────────── */
     const APP_URL  = "https://pkanetcloud.streamlit.app/";
     const TIMEOUT  = 8000;
     const FALLBACK = 9000;
-    let redirected = false;
 
+    // ── Particles ────────────────────────────────────────────
     const dark  = ['#00f5c4','#ff6eb4','#ffe660','#60b4ff','#ff9f43','#c084fc'];
     const light = ['#00b38a','#e03a8c','#c87c00','#2563c4','#d06a00','#8b3fc8'];
     const isLight = window.matchMedia('(prefers-color-scheme: light)').matches;
     const colors  = isLight ? light : dark;
     const pCont   = document.getElementById('particles');
-
     for (let i = 0; i < 22; i++) {
       const d = document.createElement('div');
       Object.assign(d.style, {
-        width:  (Math.random()*7+4)+'px',
-        height: (Math.random()*7+4)+'px',
-        background: colors[Math.floor(Math.random()*colors.length)],
-        left:   (Math.random()*100)+'%',
-        bottom: '-20px',
-        animationDuration: (Math.random()*12+8)+'s',
-        animationDelay:    (Math.random()*14)+'s',
+        width:(Math.random()*7+4)+'px', height:(Math.random()*7+4)+'px',
+        background:colors[Math.floor(Math.random()*colors.length)],
+        left:(Math.random()*100)+'%', bottom:'-20px',
+        animationDuration:(Math.random()*12+8)+'s',
+        animationDelay:(Math.random()*14)+'s',
         opacity: isLight ? 0.5 : 1,
       });
-      d.className = 'p';
-      pCont.appendChild(d);
+      d.className = 'p'; pCont.appendChild(d);
     }
     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
       const next = e.matches ? light : dark;
-      pCont.querySelectorAll('.p').forEach(p => {
-        p.style.background = next[Math.floor(Math.random()*next.length)];
-      });
+      pCont.querySelectorAll('.p').forEach(p => { p.style.background = next[Math.floor(Math.random()*next.length)]; });
     });
 
+    // ── Launch logic ─────────────────────────────────────────
     const fillEl   = document.getElementById('progressFill');
     const bubbleEl = document.getElementById('statusBubble');
     const textEl   = document.getElementById('statusText');
@@ -507,16 +383,22 @@
     function setProgress(p){ fillEl.style.width = p+'%'; }
     let fakeP = 0;
     const fakeTimer = setInterval(() => {
-      fakeP = Math.min(fakeP + Math.random()*5+1, 85);
-      setProgress(fakeP);
+      fakeP = Math.min(fakeP + Math.random()*5+1, 85); setProgress(fakeP);
     }, 200);
+
+    let redirected   = false;
+    let launchPending = false;   // set true when doLaunch is called while sheet is open
 
     function doLaunch() {
       if (redirected) return;
+
+      // ── If the A2HS sheet is still visible, hold the launch
+      //    until the user dismisses it (dismissA2HS will call doLaunch again).
+      if (a2hsVisible) { launchPending = true; return; }
+
       redirected = true;
       clearInterval(fakeTimer); clearInterval(msgTimer);
-      setProgress(100);
-      fallBtn.style.display = 'none';
+      setProgress(100); fallBtn.style.display = 'none';
       let n = 3;
       function tick() {
         if (n > 0) {
@@ -551,114 +433,42 @@
     setTimeout(() => { if (!redirected) doLaunch(); }, FALLBACK);
     setTimeout(() => { if (!redirected) fallBtn.style.display = 'inline-block'; }, 5000);
 
-    /* ── ADD-TO-HOME-SCREEN LOGIC ───────────────────────────── */
+    // ── A2HS sheet ───────────────────────────────────────────
     const a2hsSheet   = document.getElementById('a2hsSheet');
     const a2hsOverlay = document.getElementById('a2hsOverlay');
     const A2HS_KEY    = 'a2hs_dismissed_v1';
+    let   a2hsVisible = false;
 
     function isIOSSafari() {
       const ua = navigator.userAgent;
       const isIOS = /iphone|ipad|ipod/i.test(ua);
-      // Detect Safari: has 'Safari' but NOT 'CriOS' (Chrome iOS) or 'FxiOS' (Firefox iOS)
       const isSafari = /safari/i.test(ua) && !/crios|fxios|opios|mercury/i.test(ua);
       const isStandalone = navigator.standalone === true;
       return isIOS && isSafari && !isStandalone;
     }
 
     function showA2HS() {
+      a2hsVisible = true;
       a2hsOverlay.classList.add('show');
-      // Next frame so CSS transition fires
       requestAnimationFrame(() => requestAnimationFrame(() => {
         a2hsSheet.classList.add('show');
       }));
     }
 
     function dismissA2HS() {
+      a2hsVisible = false;
       a2hsSheet.classList.remove('show');
       a2hsOverlay.classList.remove('show');
       try { sessionStorage.setItem(A2HS_KEY, '1'); } catch(e){}
+      // Resume redirect if it was waiting on us
+      if (launchPending) { launchPending = false; doLaunch(); }
     }
 
-    // Show prompt after 1.8 s on iOS Safari (only if not dismissed this session)
     if (isIOSSafari()) {
       let dismissed = false;
       try { dismissed = !!sessionStorage.getItem(A2HS_KEY); } catch(e){}
-      if (!dismissed) {
-        setTimeout(showA2HS, 1800);
-      }
+      if (!dismissed) setTimeout(showA2HS, 1800);
     }
-
-    /* ── SVG → PNG  apple-touch-icon ───────────────────────────
-       iOS Safari only reads PNG for home-screen icons.
-       We draw pKaN2.svg onto a 180×180 canvas (with the app's
-       dark background + rounded corners) and inject the data-URL
-       into the <link id="appleTouchIcon"> tag so Safari uses it
-       when the user taps "Add to Home Screen".
-    ─────────────────────────────────────────────────────────── */
-    (function buildAppleTouchIcon() {
-      const SIZE   = 180;
-      const RADIUS = 38;          // iOS-style rounded corner radius
-      const BG     = '#0d0f1e';   // dark background (always; icon shown on light homescreen)
-      const PAD    = 22;          // padding around logo inside the tile
-
-      const canvas  = document.createElement('canvas');
-      canvas.width  = SIZE;
-      canvas.height = SIZE;
-      const ctx = canvas.getContext('2d');
-
-      // 1. Rounded-rect background
-      ctx.beginPath();
-      ctx.moveTo(RADIUS, 0);
-      ctx.lineTo(SIZE - RADIUS, 0);
-      ctx.quadraticCurveTo(SIZE, 0, SIZE, RADIUS);
-      ctx.lineTo(SIZE, SIZE - RADIUS);
-      ctx.quadraticCurveTo(SIZE, SIZE, SIZE - RADIUS, SIZE);
-      ctx.lineTo(RADIUS, SIZE);
-      ctx.quadraticCurveTo(0, SIZE, 0, SIZE - RADIUS);
-      ctx.lineTo(0, RADIUS);
-      ctx.quadraticCurveTo(0, 0, RADIUS, 0);
-      ctx.closePath();
-      ctx.fillStyle = BG;
-      ctx.fill();
-
-      // 2. Draw SVG logo centred with padding
-      const img = new Image();
-      img.onload = function () {
-        // clip to rounded rect so logo stays inside
-        ctx.save();
-        ctx.beginPath();
-        ctx.moveTo(RADIUS, 0);
-        ctx.lineTo(SIZE - RADIUS, 0);
-        ctx.quadraticCurveTo(SIZE, 0, SIZE, RADIUS);
-        ctx.lineTo(SIZE, SIZE - RADIUS);
-        ctx.quadraticCurveTo(SIZE, SIZE, SIZE - RADIUS, SIZE);
-        ctx.lineTo(RADIUS, SIZE);
-        ctx.quadraticCurveTo(0, SIZE, 0, SIZE - RADIUS);
-        ctx.lineTo(0, RADIUS);
-        ctx.quadraticCurveTo(0, 0, RADIUS, 0);
-        ctx.closePath();
-        ctx.clip();
-        ctx.drawImage(img, PAD, PAD, SIZE - PAD * 2, SIZE - PAD * 2);
-        ctx.restore();
-
-        // 3. Inject PNG data-URL into the <link> tag
-        try {
-          const png = canvas.toDataURL('image/png');
-          document.getElementById('appleTouchIcon').href = png;
-        } catch (e) {
-          // Cross-origin canvas taint — fall back to raw SVG
-          // (won't work on iOS but harmless)
-          document.getElementById('appleTouchIcon').href = 'pKaNi.png';
-        }
-      };
-      img.onerror = function () {
-        // SVG load failed — nothing we can do
-        document.getElementById('appleTouchIcon').href = 'pKaNi.png';
-      };
-      // Must set crossOrigin before src to avoid canvas taint for same-origin SVGs
-      img.crossOrigin = 'anonymous';
-      img.src = 'pKaN1.png';
-    })();
   </script>
 </body>
 </html>
