@@ -9,7 +9,15 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="pKaNET Cloud+" />
-  <link rel="apple-touch-icon" href="pKaN2.svg" />
+  <!--
+    apple-touch-icon must be PNG — iOS ignores SVG.
+    We render pKaN2.svg onto a canvas at runtime and swap the href in.
+    The <link> is pre-inserted so Safari picks it up immediately after the
+    script runs (before the user taps "Add to Home Screen").
+  -->
+  <link id="appleTouchIcon" rel="apple-touch-icon" sizes="180x180" href="" />
+  <!-- Web App Manifest (Android / Chrome PWA) — SVG icons are fine here -->
+  <link rel="manifest" href="manifest.json" />
 
   <meta name="theme-color" content="#0d0f1e" media="(prefers-color-scheme: dark)" />
   <meta name="theme-color" content="#eef2ff" media="(prefers-color-scheme: light)" />
@@ -579,6 +587,78 @@
         setTimeout(showA2HS, 1800);
       }
     }
+
+    /* ── SVG → PNG  apple-touch-icon ───────────────────────────
+       iOS Safari only reads PNG for home-screen icons.
+       We draw pKaN2.svg onto a 180×180 canvas (with the app's
+       dark background + rounded corners) and inject the data-URL
+       into the <link id="appleTouchIcon"> tag so Safari uses it
+       when the user taps "Add to Home Screen".
+    ─────────────────────────────────────────────────────────── */
+    (function buildAppleTouchIcon() {
+      const SIZE   = 180;
+      const RADIUS = 38;          // iOS-style rounded corner radius
+      const BG     = '#0d0f1e';   // dark background (always; icon shown on light homescreen)
+      const PAD    = 22;          // padding around logo inside the tile
+
+      const canvas  = document.createElement('canvas');
+      canvas.width  = SIZE;
+      canvas.height = SIZE;
+      const ctx = canvas.getContext('2d');
+
+      // 1. Rounded-rect background
+      ctx.beginPath();
+      ctx.moveTo(RADIUS, 0);
+      ctx.lineTo(SIZE - RADIUS, 0);
+      ctx.quadraticCurveTo(SIZE, 0, SIZE, RADIUS);
+      ctx.lineTo(SIZE, SIZE - RADIUS);
+      ctx.quadraticCurveTo(SIZE, SIZE, SIZE - RADIUS, SIZE);
+      ctx.lineTo(RADIUS, SIZE);
+      ctx.quadraticCurveTo(0, SIZE, 0, SIZE - RADIUS);
+      ctx.lineTo(0, RADIUS);
+      ctx.quadraticCurveTo(0, 0, RADIUS, 0);
+      ctx.closePath();
+      ctx.fillStyle = BG;
+      ctx.fill();
+
+      // 2. Draw SVG logo centred with padding
+      const img = new Image();
+      img.onload = function () {
+        // clip to rounded rect so logo stays inside
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(RADIUS, 0);
+        ctx.lineTo(SIZE - RADIUS, 0);
+        ctx.quadraticCurveTo(SIZE, 0, SIZE, RADIUS);
+        ctx.lineTo(SIZE, SIZE - RADIUS);
+        ctx.quadraticCurveTo(SIZE, SIZE, SIZE - RADIUS, SIZE);
+        ctx.lineTo(RADIUS, SIZE);
+        ctx.quadraticCurveTo(0, SIZE, 0, SIZE - RADIUS);
+        ctx.lineTo(0, RADIUS);
+        ctx.quadraticCurveTo(0, 0, RADIUS, 0);
+        ctx.closePath();
+        ctx.clip();
+        ctx.drawImage(img, PAD, PAD, SIZE - PAD * 2, SIZE - PAD * 2);
+        ctx.restore();
+
+        // 3. Inject PNG data-URL into the <link> tag
+        try {
+          const png = canvas.toDataURL('image/png');
+          document.getElementById('appleTouchIcon').href = png;
+        } catch (e) {
+          // Cross-origin canvas taint — fall back to raw SVG
+          // (won't work on iOS but harmless)
+          document.getElementById('appleTouchIcon').href = 'pKaN2.svg';
+        }
+      };
+      img.onerror = function () {
+        // SVG load failed — nothing we can do
+        document.getElementById('appleTouchIcon').href = 'pKaN2.svg';
+      };
+      // Must set crossOrigin before src to avoid canvas taint for same-origin SVGs
+      img.crossOrigin = 'anonymous';
+      img.src = 'pKaN2.svg';
+    })();
   </script>
 </body>
 </html>
