@@ -4,6 +4,9 @@
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/16oz3jR6gWOzaSaJImlVflPkgT8eTcfTi?usp=sharing)
 [![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://nyelidl.github.io/pKaNET_Cloud/)
+[![PyPI](https://img.shields.io/pypi/v/pkanet-cloud)](https://pypi.org/project/pkanet-cloud/)
+[![Python](https://img.shields.io/pypi/pyversions/pkanet-cloud)](https://pypi.org/project/pkanet-cloud/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ![pKaNET Workflow](https://github.com/nyelidl/pKaNET_Cloud/blob/main/Pka_WF.png)
 
@@ -42,6 +45,163 @@ Main functions:
 
 ---
 
+## 🚀 Installation
+
+```bash
+# Minimal (RDKit + requests only — heuristic mode)
+pip install pkanet-cloud
+
+# Recommended (adds Dimorphite-DL and pandas)
+pip install "pkanet-cloud[recommended]"
+
+# Full (adds propka and Streamlit web UI)
+pip install "pkanet-cloud[all]"
+```
+
+> **RDKit note:** `rdkit` is listed as a dependency but PyPI's `rdkit` wheel
+> requires Python ≥ 3.9 on 64-bit platforms. If your environment uses a
+> conda-managed RDKit, install without deps:
+> ```bash
+> pip install pkanet-cloud --no-deps
+> pip install requests dimorphite-dl pandas   # then add these manually
+> ```
+
+---
+
+## 💻 Command-Line Interface (CLI)
+
+After installation a `pkanet` command is available globally.
+
+### Basic usage
+
+```bash
+# Single SMILES string
+pkanet --smiles "CC(=O)OC1=CC=CC=C1C(=O)O" --ph 7.4
+
+# Compound name — resolved automatically via PubChem
+pkanet --name "baicalein" --ph 7.4 --out-dir ./results
+
+# SMILES file (one SMILES [name] per line) — also accepted via --file
+pkanet --smi-file ligands.smi --formats PDB MOL2 --top-n 3
+
+# Ligand structure file (.pdb / .mol2 / .sdf)
+pkanet --file ligand.pdb --no-pubchem --keep-stereo
+```
+
+### Fast heuristic charge estimation
+
+For large libraries where 3D generation is not needed, `--fast` uses the
+sub-millisecond `heuristic_net_charge()` path and skips tautomer enumeration
+and Dimorphite-DL entirely.
+
+```bash
+# Single molecule
+pkanet --smiles "NCC(=O)O" --ph 7.4 --fast
+
+# Batch — prints TSV to stdout (name / SMILES / charge / mode)
+pkanet --smi-file library.smi --fast --quiet
+
+# .smi file passed via --file is auto-detected and works identically
+pkanet --file library.smi --fast --quiet
+```
+
+### All flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--ph` | `7.4` | Target pH |
+| `--out-dir` | `./pkanet_out` | Output directory |
+| `--out-name` | `ligand` | Base name for output files |
+| `--formats PDB MOL2 SDF` | `PDB` | 3D output format(s) |
+| `--ph-window` | `1.0` | Dimorphite-DL enumeration window (±window/2) |
+| `--max-tautomers` | `8` | Maximum tautomers to enumerate |
+| `--top-n` | `5` | Top N microstates to rank |
+| `--top-k-3d` | `3` | Write 3D structures for top-k microstates |
+| `--keep-stereo` | off | Skip R/S stereoisomer enumeration |
+| `--no-pubchem` | off | Disable PubChem experimental pKa lookup |
+| `--fast` | off | Heuristic charge only — no 3D, no tautomers |
+| `--json-out FILE` | — | Write full results as JSON |
+| `--quiet` | off | TSV one-liner output, no banner |
+
+### Example output (normal mode)
+
+```
+╔══════════════════════════════════════════════════════════╗
+║             pKaNET Cloud+  —  CLI                        ║
+╚══════════════════════════════════════════════════════════╝
+
+  pKa backend : heuristic (SMARTS table)
+  Target pH   : 7.4
+
+════════════════════════════════════════════════════════════════
+  🏆  aspirin  —  Rank-1 Microstate
+════════════════════════════════════════════════════════════════
+  Score                       : -0.312
+  SMILES                      : CC(=O)Oc1ccccc1C(=O)[O-]
+  Charge @ pH 7.4             : -1
+  Zwitterion (strict)         : NO
+  Amide preserved             : NO
+  pKa source                  : heuristic
+  PubChem CID                 : 2244
+
+  📊  Ranked microstates (top 5)
+  Rank     Score  Charge  Rec  SMILES
+  ────  ────────  ──────  ───  ────────────────────────────────────────
+     1    -0.312      -1    ★  CC(=O)Oc1ccccc1C(=O)[O-]
+     2    -1.562       0       CC(=O)Oc1ccccc1C(=O)O
+```
+
+---
+
+## ⚡ Public API
+
+Three public functions are available for programmatic and large-scale use:
+
+```python
+from pkanet import predict_charge, heuristic_net_charge, batch_predict_charges
+
+# Sub-millisecond heuristic estimate with multi-site charge caps
+charge = heuristic_net_charge("CC(=O)O", ph=7.4)          # → −1
+
+# Smart dispatcher: fast normally, full pipeline for borderline pKa or tautomeric risk
+charge, mode = predict_charge("CC(=O)O", ph=7.4, mode="auto")
+
+# Batch prediction — returns a pandas DataFrame
+df = batch_predict_charges(["CC(=O)O", "CN", "NCC(=O)O"], ph=7.4, mode="auto")
+```
+
+`predict_charge(mode='auto')` automatically escalates to the full tautomer + Dimorphite-DL + scoring pipeline when:
+
+- any detected site pKa is within 1.5 pH units of the target, or
+- the molecule has ring systems but no detectable ionisable sites on the parent form, indicating tautomeric enol risk, such as warfarin supplied as the keto form.
+
+The `heuristic_net_charge()` function applies two charge-cap rules that suppress systematic over-charging in the fast path: a **polyamine cap** and a **multi-acid cap**.
+
+### Full pipeline via `run_job`
+
+```python
+from pkanet.core import run_job
+
+result = run_job(
+    input_type     = "SMILES",
+    smiles_text    = "CC(=O)OC1=CC=CC=C1C(=O)O",
+    uploaded_bytes = None,
+    uploaded_name  = None,
+    target_pH      = 7.4,
+    output_name    = "aspirin",
+    out_dir        = "./output",
+    output_formats = ["PDB"],
+    use_pubchem    = True,
+)
+
+top = result["results"][0]
+print(top["selected_microstate_smiles"])   # CC(=O)Oc1ccccc1C(=O)[O-]
+print(top["formal_charge"])                # -1
+print(top["minimized_pdb"])                # ./output/aspirin_micro1_min.pdb
+```
+
+---
+
 ## 🧪 Internal Regression Test Suite
 
 The internal regression suite contains **65 chemically curated test cases** across 12 functional-group classes.
@@ -70,7 +230,7 @@ python3 test_pkanet.py pKaNET.py G12      # drug regression panel only
 | G10 | PubChem pKa guard | 3 | 0 | ✅ |
 | G11 | Truly neutral | 4 | 0 | ✅ |
 | G12 | Drug regression panel | 7 | 0 | ✅ |
-| **Total** |  | **65** | **0** | ✅ |
+| **Total** | | **65** | **0** | ✅ |
 
 ---
 
@@ -86,8 +246,6 @@ This benchmark is **not** a numerical pKa prediction benchmark. The reported agr
 
 ### Drug-Like Screening Criteria
 
-The validation subset was selected from a combined unified dataset by applying drug-like / small-molecule criteria.
-
 | Property | Threshold |
 |---|---|
 | Molecular weight | 100–600 Da |
@@ -102,7 +260,7 @@ From 38,724 unique SMILES, 35,872 passed these criteria. The final validation su
 
 ### Overall Results
 
-| Dataset | Correct | Total with reference annotation | Agreement rate |
+| Dataset | Correct | Total | Agreement rate |
 |---|---:|---:|---:|
 | 65-case curated regression set | 65 | 65 | **100.00%** |
 | pKaHub-derived validation subset | 18,850 | 27,183 | **69.34%** |
@@ -128,41 +286,14 @@ The 8,333 disagreements (30.66%) are concentrated in molecules where at least on
 
 ---
 
-## ⚡ Public API
+## 🔑 pKa Backends (auto-selected by priority)
 
-Three public functions are available for programmatic and large-scale use:
-
-```python
-# Sub-millisecond heuristic estimate with multi-site charge caps
-charge = core.heuristic_net_charge("CC(=O)O", ph=7.4)          # → −1
-
-# Smart dispatcher: fast normally, full pipeline for borderline pKa or tautomeric risk
-charge, mode = core.predict_charge("CC(=O)O", ph=7.4, mode="auto")
-
-# Batch prediction — returns a pandas DataFrame
-df = core.batch_predict_charges(["CC(=O)O", "CN", "NCC(=O)O"], ph=7.4, mode="auto")
-```
-
-`predict_charge(mode='auto')` automatically escalates to the full tautomer + Dimorphite-DL + scoring pipeline when:
-
-- any detected site pKa is within 1.5 pH units of the target, or
-- the molecule has ring systems but no detectable ionisable sites on the parent form, indicating tautomeric enol risk, such as warfarin supplied as the keto form.
-
-The `heuristic_net_charge()` function applies two charge-cap rules that suppress systematic over-charging in the fast path: a **polyamine cap** and a **multi-acid cap**.
-
----
-
-## 🗂️ Benchmark Files
-
-| File | Description |
-|---|---|
-| `pKaNET_pKahub_docking_relevant_subset_validation.csv` | Curated validation subset with pKaHub-derived reference charge labels and pKaNET predictions |
-| `pKaNET_pKahub_docking_relevant_failed_cases.csv` | Disagreement cases for manual review and future rule refinement |
-| `curated_regression_set.csv` | Internal 65-compound chemically curated regression set |
-| `validation_pass.csv` | Molecules with correct net-charge assignment |
-| `validation_fail.csv` | Disagreement cases |
-| `validation_summary_template.csv` | Template for recording new validation outputs |
-| `failed_cases_review_template.csv` | Template for manually classifying disagreement cases |
+| Priority | Backend | Install |
+|---|---|---|
+| 1 | **pkasolver** (GNN) | `pip install pkasolver` |
+| 2 | **propka** (semi-empirical) | `pip install "pkanet-cloud[propka]"` |
+| 3 | **unipka CLI** | system install |
+| 4 | **heuristic SMARTS table** | built-in, always available |
 
 ---
 
@@ -190,6 +321,20 @@ The `heuristic_net_charge()` function applies two charge-cap rules that suppress
 
 ---
 
+## 🗂️ Benchmark Files
+
+| File | Description |
+|---|---|
+| `pKaNET_pKahub_docking_relevant_subset_validation.csv` | Curated validation subset with pKaHub-derived reference charge labels and pKaNET predictions |
+| `pKaNET_pKahub_docking_relevant_failed_cases.csv` | Disagreement cases for manual review and future rule refinement |
+| `curated_regression_set.csv` | Internal 65-compound chemically curated regression set |
+| `validation_pass.csv` | Molecules with correct net-charge assignment |
+| `validation_fail.csv` | Disagreement cases |
+| `validation_summary_template.csv` | Template for recording new validation outputs |
+| `failed_cases_review_template.csv` | Template for manually classifying disagreement cases |
+
+---
+
 ## 🎯 Intended Use Cases
 
 - Ligand preparation before **molecular docking** with AutoDock Vina, VinaXB, GNINA, Glide, GOLD, or rDock.
@@ -207,7 +352,7 @@ pKaNET Cloud+ is the default protonation engine in the [Anyone Can Dock](https:/
 protonate_pkanet()
 ```
 
-```text
+```
 input ligand → standardisation → Dimorphite-DL enumeration →
 pKaNET Cloud+ ranking → dominant microspecies → 3D generation →
 minimisation → docking-ready output
@@ -261,7 +406,7 @@ This tool builds on:
 
 If you use pKaNET Cloud+ in your work, please cite:
 
-> Hengphasatporn, K. et al. DFDD: A Cloud-Ready Tool for Distance-Guided Fully Dynamic Docking in Host–Guest Complexation, *Journal of Chemical Information and Modeling* **2026**, 66, 1955-1963. DOI: 10.1021/acs.jcim.5c02852. 
+> Hengphasatporn, K. et al. DFDD: A Cloud-Ready Tool for Distance-Guided Fully Dynamic Docking in Host–Guest Complexation, *Journal of Chemical Information and Modeling* **2026**, 66, 1955-1963. DOI: 10.1021/acs.jcim.5c02852.
 
 For the pKaHub benchmark reference dataset, cite:
 
