@@ -407,7 +407,7 @@ _IONIZABLE_SITE_DEF = [
     #   sulfamethazine (pyrimidine)  pKa 7.4
     # MUST precede sulfonamide_aryl_NH (first-match-wins).
     # 5-membered heteroaromatic (isoxazole/oxazole/thiazole/pyrazole etc.)
-    ("sulfonamide_5het_NH",        "[SX4](=O)(=O)[NX3;H1][c;$([c]1[c,n][o,n,s][c,n][c,n]1),$([c]1[c,n][c,n][o,n,s][c,n]1)]",  5.7, "acid"),
+    ("sulfonamide_5het_NH",        "[SX4](=O)(=O)[NX3;H1][c;$([c]1[o,n,s][c,n][c,n][c,n]1),$([c]1[c,n][o,n,s][c,n][c,n]1),$([c]1[c,n][c,n][o,n,s][c,n]1)]",  5.7, "acid"),
     # Thiazol-2-yl (sulfathiazole pKa 7.1)
     ("sulfonamide_thiazole_NH",    "[SX4](=O)(=O)[NX3;H1]c1nccs1",                       7.0, "acid"),
     # Oxazol-2-yl
