@@ -16,6 +16,13 @@ from core import (
 )
 import pandas as pd
 from PIL import Image
+
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()  # lets Image.open() handle .heic/.heif transparently
+    _HEIF_OK = True
+except ImportError:
+    _HEIF_OK = False
 import streamlit.components.v1 as components
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -487,8 +494,8 @@ elif input_type == "Upload 3D structure":
 else:  # input_type == "Upload PDF / Image"
     st.markdown("#### 1 · Upload the PDF page or image with your scaffold + R-group table")
     pdf_file = st.file_uploader(
-        "PDF or image file (PDF / PNG / JPG / WEBP)",
-        type=["pdf", "png", "jpg", "jpeg", "webp"],
+        "PDF or image file (PDF / PNG / JPG / WEBP / HEIC)",
+        type=["pdf", "png", "jpg", "jpeg", "webp", "heic", "heif"],
         key="pdf2smi_uploader",
     )
     if pdf_file is not None:
@@ -534,7 +541,29 @@ else:  # input_type == "Upload PDF / Image"
                 st.image(img, use_container_width=True)
                 st.caption(f"{filename_in_state} · {img.size[0]}×{img.size[1]} px")
             except Exception as e:
+                magic = pdf_bytes_in_state[:16]
+                looks_like = (
+                    "HEIC/HEIF (iPhone photo format)" if b"ftyp" in magic and
+                        (b"heic" in magic or b"heix" in magic or b"mif1" in magic) else
+                    "AVIF" if b"ftypavif" in magic else
+                    f"an unrecognized format (first bytes: {magic!r})"
+                )
                 st.error(f"❌ Could not open image: {e}")
+                if "HEIC" in looks_like and not _HEIF_OK:
+                    st.warning(
+                        "This looks like a **HEIC/HEIF** photo (the default format for "
+                        "iPhone camera shots), and the `pillow-heif` plugin needed to "
+                        "decode it isn't installed on this server. Add `pillow-heif` to "
+                        "`requirements.txt` and redeploy — or for now, re-export/share the "
+                        "photo as PNG/JPEG (e.g. iPhone Settings → Camera → Formats → "
+                        "'Most Compatible') and re-upload."
+                    )
+                else:
+                    st.warning(
+                        f"This appears to be {looks_like}, which isn't a format this "
+                        "server's Pillow install can decode. Try converting it to PNG "
+                        "or JPEG and re-uploading."
+                    )
             st.info(
                 "📝 No text layer to cross-check on an image upload — read the "
                 "compound IDs and R-group names directly from the picture above."
@@ -546,19 +575,29 @@ else:  # input_type == "Upload PDF / Image"
 
         st.markdown("#### 2 · Describe the scaffold(s)")
         st.caption(
-            "Dummy attachment atoms `[*:1]`, `[*:2]`, `[*:3]` mark where R1, "
-            "the fixed aryl/heteroaryl group, and R2 attach. Omit `[*:3]` "
-            "entirely for a scaffold that has no R2."
+            "Dummy attachment atoms `[*:1]`, `[*:2]`, `[*:3]`, ... mark where "
+            "each R-group attaches. **Slot_Roles** maps each slot, in order, "
+            "to a column name in the Compounds table below — leave it blank "
+            "for the default `R1,AR,R2`. **Repeat a role to attach the same "
+            "fragment at more than one position** (e.g. `R1,R2,R1,R2` for a "
+            "symmetric scaffold where both arms carry the same R1/R2 pair)."
         )
         if "pdf2smi_templates_df" not in st.session_state:
             st.session_state["pdf2smi_templates_df"] = pd.DataFrame(
-                columns=["Template", "Scaffold_SMILES"])
+                columns=["Template", "Scaffold_SMILES", "Slot_Roles"])
         st.session_state["pdf2smi_templates_df"] = st.data_editor(
             st.session_state["pdf2smi_templates_df"], num_rows="dynamic",
             use_container_width=True, key=f"pdf2smi_templates_editor_{_v}",
             column_config={
                 "Template": st.column_config.TextColumn(required=True),
                 "Scaffold_SMILES": st.column_config.TextColumn(required=True, width="large"),
+                "Slot_Roles": st.column_config.TextColumn(
+                    required=False,
+                    help="Comma-separated column names, one per [*:n] slot in "
+                         "order. Blank = default R1,AR,R2. Repeat a name to "
+                         "reuse the same fragment at multiple slots, e.g. "
+                         "R1,R2,R1,R2.",
+                ),
             },
         )
 
@@ -599,12 +638,12 @@ else:  # input_type == "Upload PDF / Image"
             },
         )
 
-        load_ex_col, clear_col, build_col = st.columns(3)
-        if load_ex_col.button("📋 Load example (lignin imidazoles, full set)", use_container_width=True):
+        load_ex_col, load_ex2_col, clear_col, build_col = st.columns(4)
+        if load_ex_col.button("📋 Load example (lignin imidazoles)", use_container_width=True):
             st.session_state["pdf2smi_templates_df"] = pd.DataFrame([
-                {"Template": "core_2",    "Scaffold_SMILES": "Cc1nc([*:1])[nH]c1[*:2]"},
-                {"Template": "core_2_ND", "Scaffold_SMILES": "Cc1nc([*:1])n([2H])c1[*:2]"},
-                {"Template": "core_3",    "Scaffold_SMILES": "Cc1nc([*:1])n([*:3])c1[*:2]"},
+                {"Template": "core_2",    "Scaffold_SMILES": "Cc1nc([*:1])[nH]c1[*:2]",        "Slot_Roles": ""},
+                {"Template": "core_2_ND", "Scaffold_SMILES": "Cc1nc([*:1])n([2H])c1[*:2]",      "Slot_Roles": ""},
+                {"Template": "core_3",    "Scaffold_SMILES": "Cc1nc([*:1])n([*:3])c1[*:2]",     "Slot_Roles": ""},
             ])
             st.session_state["pdf2smi_library_df"] = pd.DataFrame([
                 {"Name": "Ph",              "SMILES": "c1ccccc1"},
@@ -664,9 +703,41 @@ else:  # input_type == "Upload PDF / Image"
             st.session_state["pdf2smi_table_version"] = _v + 1
             st.rerun()
 
+        if load_ex2_col.button("📋 Load example (symmetric R-groups)", use_container_width=True):
+            # Catechol bis-ether where BOTH arms carry the same NR1R2 amide --
+            # demonstrates Slot_Roles repetition: "R1,R2,R1,R2" attaches the
+            # same R1 fragment to slots 1 & 3, and the same R2 to slots 2 & 4.
+            st.session_state["pdf2smi_templates_df"] = pd.DataFrame([
+                {"Template": "catechol_bisamide",
+                 "Scaffold_SMILES": "c1(OCC(=O)N([*:1])[*:2])c(OCC(=O)N([*:3])[*:4])cccc1",
+                 "Slot_Roles": "R1,R2,R1,R2"},
+            ])
+            st.session_state["pdf2smi_library_df"] = pd.DataFrame([
+                {"Name": "Me",       "SMILES": "C"},
+                {"Name": "Et",       "SMILES": "CC"},
+                {"Name": "n-Bu",     "SMILES": "CCCC"},
+                {"Name": "n-C10H21", "SMILES": "CCCCCCCCCC"},
+                {"Name": "i-Bu",     "SMILES": "CC(C)C"},
+                {"Name": "Cy",       "SMILES": "C1CCCCC1"},
+                {"Name": "Ph",       "SMILES": "c1ccccc1"},
+                {"Name": "Bn",       "SMILES": "Cc1ccccc1"},
+            ])
+            st.session_state["pdf2smi_compounds_df"] = pd.DataFrame([
+                {"Compound_ID": "1a", "Template": "catechol_bisamide", "R1": "Me",   "R2": "Me",   "AR": ""},
+                {"Compound_ID": "1b", "Template": "catechol_bisamide", "R1": "Et",   "R2": "Et",   "AR": ""},
+                {"Compound_ID": "1c", "Template": "catechol_bisamide", "R1": "n-Bu", "R2": "n-Bu", "AR": ""},
+                {"Compound_ID": "1d", "Template": "catechol_bisamide", "R1": "n-C10H21", "R2": "n-C10H21", "AR": ""},
+                {"Compound_ID": "1e", "Template": "catechol_bisamide", "R1": "i-Bu", "R2": "i-Bu", "AR": ""},
+                {"Compound_ID": "1f", "Template": "catechol_bisamide", "R1": "Cy",   "R2": "Cy",   "AR": ""},
+                {"Compound_ID": "1g", "Template": "catechol_bisamide", "R1": "Ph",   "R2": "Bn",   "AR": ""},
+                {"Compound_ID": "1h", "Template": "catechol_bisamide", "R1": "Et",   "R2": "Cy",   "AR": ""},
+            ])
+            st.session_state["pdf2smi_table_version"] = _v + 1
+            st.rerun()
+
         if clear_col.button("🗑️ Clear tables", use_container_width=True):
             st.session_state["pdf2smi_templates_df"] = pd.DataFrame(
-                columns=["Template", "Scaffold_SMILES"])
+                columns=["Template", "Scaffold_SMILES", "Slot_Roles"])
             st.session_state["pdf2smi_library_df"] = pd.DataFrame(columns=["Name", "SMILES"])
             st.session_state["pdf2smi_compounds_df"] = pd.DataFrame(
                 columns=["Compound_ID", "Template", "R1", "R2", "AR"])
@@ -678,8 +749,13 @@ else:  # input_type == "Upload PDF / Image"
                                   st.session_state["pdf2smi_templates_df"]["Scaffold_SMILES"]))
             library = dict(zip(st.session_state["pdf2smi_library_df"]["Name"],
                                 st.session_state["pdf2smi_library_df"]["SMILES"]))
+            template_roles = {}
+            if "Slot_Roles" in st.session_state["pdf2smi_templates_df"].columns:
+                template_roles = dict(zip(st.session_state["pdf2smi_templates_df"]["Template"],
+                                           st.session_state["pdf2smi_templates_df"]["Slot_Roles"]))
             result_df, mols, legends = pdf2smi_build_all(
-                st.session_state["pdf2smi_compounds_df"], templates, library)
+                st.session_state["pdf2smi_compounds_df"], templates, library,
+                template_roles=template_roles)
             st.session_state["pdf2smi_result_df"]      = result_df
             st.session_state["pdf2smi_result_mols"]     = mols
             st.session_state["pdf2smi_result_legends"]  = legends
