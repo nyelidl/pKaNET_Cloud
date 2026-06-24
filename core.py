@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, rdMolDescriptors
+from rdkit.Chem import AllChem, rdMolDescriptors, Descriptors
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
@@ -44,6 +44,13 @@ try:
 except ImportError:
     _requests = None; _REQUESTS_OK = False
     print("⚠️  requests not installed — PubChem lookup disabled.")
+
+try:
+    import fitz  # PyMuPDF
+    _PYMUPDF_OK = True
+except ImportError:
+    fitz = None; _PYMUPDF_OK = False
+    print("⚠️  PyMuPDF (fitz) not available — PDF→SMILES tab disabled.")
 
 try:
     from dimorphite_dl import protonate_smiles as _dimorphite_fn
@@ -87,6 +94,197 @@ def convert_pdb_to_mol2_obabel(pdb_path, mol2_path):
                            capture_output=True, text=True, timeout=30)
         return r.returncode == 0 and Path(mol2_path).exists()
     except Exception: return False
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 0  ·  PDF → SMILES  (scaffold + R-group table builder)
+#
+# Lets a user upload a PDF page that shows a core scaffold + R-group
+# legend/table (e.g. a SAR table from a paper or SI) and turn it into a
+# validated batch of SMILES that feeds straight into run_job() exactly like
+# a hand-uploaded .smi file does.
+#
+# Reading the *drawn* scaffold is intentionally a human-in-the-loop step —
+# there is no reliable way to OCR bond connectivity out of a PDF. What is
+# automated: rendering the page, pulling any extractable text layer, and —
+# once the scaffold + substituents are described as SMILES — assembling,
+# validating, and exporting the molecules.
+#
+# Assembly uses RDKit's `molzip`: the scaffold SMILES carries dummy
+# attachment atoms ([*:1], [*:2], [*:3]); each R-group fragment is written
+# attachment-atom-first (e.g. para-hydroxyphenyl = "c1ccc(O)cc1") and is
+# tagged with the matching [*:n] automatically before zipping. This avoids
+# all manual SMILES ring-closure-digit bookkeeping, even for fused-ring
+# R-groups (e.g. a pyrenyl group).
+# ─────────────────────────────────────────────────────────────────────────────
+
+def pdf2smi_get_page_count(pdf_bytes):
+    """Number of pages in a PDF (1-indexed page numbers are used elsewhere)."""
+    if not _PYMUPDF_OK:
+        raise RuntimeError("PyMuPDF (fitz) is not installed — cannot read PDFs.")
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        return doc.page_count
+
+
+def pdf2smi_render_page(pdf_bytes, page_num, dpi=200):
+    """Render one PDF page (1-indexed) to a PIL Image, for visual inspection."""
+    if not _PYMUPDF_OK:
+        raise RuntimeError("PyMuPDF (fitz) is not installed — cannot read PDFs.")
+    from PIL import Image  # local import: PDF tab is the only consumer
+    zoom = dpi / 72.0
+    matrix = fitz.Matrix(zoom, zoom)
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        page = doc[page_num - 1]
+        pix = page.get_pixmap(matrix=matrix, alpha=False)
+        return Image.open(__import__("io").BytesIO(pix.tobytes("png")))
+
+
+def pdf2smi_extract_text(pdf_bytes, page_num):
+    """Plain text layer of one PDF page (1-indexed). '' if none exists
+    (common for flattened/outlined PDF exports — the page is then read
+    visually instead via pdf2smi_render_page)."""
+    if not _PYMUPDF_OK:
+        raise RuntimeError("PyMuPDF (fitz) is not installed — cannot read PDFs.")
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+        page = doc[page_num - 1]
+        return page.get_text("text").strip()
+
+
+def pdf2smi_resolve_fragment(value, library):
+    """Look *value* up in the fragment-name library; otherwise treat it as a
+    literal attachment-first SMILES. Blank/None → None (slot unused)."""
+    if value is None:
+        return None
+    value = str(value).strip()
+    if not value:
+        return None
+    return library.get(value, value)
+
+
+def pdf2smi_build_molecule(scaffold_smiles, slot_fragments):
+    """
+    scaffold_smiles : SMILES with dummy attachment atoms, e.g.
+        "Cc1nc([*:1])[nH]c1[*:2]"
+    slot_fragments  : {1: "c1ccccc1", 2: "c1cc(OC)c(O)c(OC)c1", ...} — each
+        value is an attachment-first SMILES fragment (no [*:n] needed; it is
+        added automatically for the matching slot number).
+
+    Returns (mol, error_message). mol is None on failure.
+    """
+    core_mol = Chem.MolFromSmiles(scaffold_smiles)
+    if core_mol is None:
+        return None, f"Could not parse scaffold SMILES: {scaffold_smiles!r}"
+
+    combined = core_mol
+    for slot, frag_smiles in slot_fragments.items():
+        if frag_smiles is None:
+            continue
+        tagged = f"[*:{slot}]{frag_smiles}"
+        frag_mol = Chem.MolFromSmiles(tagged)
+        if frag_mol is None:
+            return None, f"Could not parse fragment for [*:{slot}]: {frag_smiles!r}"
+        combined = Chem.CombineMols(combined, frag_mol)
+
+    try:
+        zipped = Chem.molzip(combined)
+        Chem.SanitizeMol(zipped)
+    except Exception as exc:
+        return None, f"molzip/sanitize failed: {exc}"
+
+    remaining = sum(1 for a in zipped.GetAtoms() if a.GetSymbol() == "*")
+    if remaining:
+        return None, (
+            f"{remaining} unfilled attachment point(s) remain "
+            "-- check that every [*:n] in the scaffold has a matching slot."
+        )
+    return zipped, ""
+
+
+def pdf2smi_describe_mol(mol):
+    return {
+        "smiles": Chem.MolToSmiles(mol),
+        "formula": rdMolDescriptors.CalcMolFormula(mol),
+        "mw": round(Descriptors.MolWt(mol), 2),
+    }
+
+
+def pdf2smi_build_all(compounds_df, templates, library):
+    """
+    Batch-build a compound table into validated molecules.
+
+    compounds_df columns expected: Compound_ID, Template, R1, R2, AR
+    (R2 may be blank for scaffolds that don't use a third slot)
+
+    templates : {template_name: scaffold_smiles_with_dummy_atoms}
+    library   : {fragment_name: attachment_first_smiles}
+
+    Returns (result_df, mols_for_grid, legends_for_grid). result_df has
+    columns Compound_ID, SMILES, Formula, MW, Status, Error.
+    """
+    try:
+        import pandas as pd
+    except ImportError:
+        raise ImportError("pandas is required for pdf2smi_build_all()")
+
+    rows = []
+    mols_for_grid = []
+    legends_for_grid = []
+
+    for _, row in compounds_df.iterrows():
+        cid = str(row.get("Compound_ID", "")).strip()
+        tmpl_name = str(row.get("Template", "")).strip()
+        if not cid:
+            continue
+
+        scaffold = templates.get(tmpl_name)
+        if scaffold is None:
+            rows.append(dict(Compound_ID=cid, SMILES=None, Formula=None, MW=None,
+                              Status="FAILED", Error=f"Unknown template name: {tmpl_name!r}"))
+            continue
+
+        slot_fragments = {
+            1: pdf2smi_resolve_fragment(row.get("R1"), library),
+            2: pdf2smi_resolve_fragment(row.get("AR"), library),
+            3: pdf2smi_resolve_fragment(row.get("R2"), library),
+        }
+        slot_fragments = {k: v for k, v in slot_fragments.items() if v is not None}
+
+        mol, err = pdf2smi_build_molecule(scaffold, slot_fragments)
+        if mol is None:
+            rows.append(dict(Compound_ID=cid, SMILES=None, Formula=None, MW=None,
+                              Status="FAILED", Error=err))
+            continue
+
+        desc = pdf2smi_describe_mol(mol)
+        rows.append(dict(Compound_ID=cid, SMILES=desc["smiles"], Formula=desc["formula"],
+                          MW=desc["mw"], Status="OK", Error=""))
+        mols_for_grid.append(mol)
+        legends_for_grid.append(cid)
+
+    result_df = pd.DataFrame(rows)
+    return result_df, mols_for_grid, legends_for_grid
+
+
+def pdf2smi_make_grid_image(mols, legends, mols_per_row=5, sub_size=(220, 200)):
+    if not mols:
+        return None
+    from rdkit.Chem import Draw
+    return Draw.MolsToGridImage(mols, molsPerRow=mols_per_row, subImgSize=sub_size, legends=legends)
+
+
+def pdf2smi_to_smi_bytes(result_df):
+    """Render validated rows of a pdf2smi_build_all() result as .smi-format
+    bytes (SMILES<tab>name per line) — the same shape run_job() already
+    expects for input_type='SMI_FILE' via parse_smi_lines()."""
+    lines = []
+    for _, r in result_df.iterrows():
+        if r.get("Status") == "OK" and r.get("SMILES"):
+            lines.append(f"{r['SMILES']}\t{r['Compound_ID']}")
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def pdf2smi_to_csv_bytes(result_df):
+    return result_df.to_csv(index=False).encode("utf-8")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STAGE A  ·  RDKit standardization
