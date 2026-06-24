@@ -9,8 +9,12 @@ import requests as _requests
 from urllib.parse import quote as _url_quote
 from pathlib import Path
 from core import (
-    run_job, zip_all_outputs, zip_minimized_structures, DISPLAY_COLS, _PKA_BACKEND
+    run_job, zip_all_outputs, zip_minimized_structures, DISPLAY_COLS, _PKA_BACKEND,
+    _PYMUPDF_OK,
+    pdf2smi_get_page_count, pdf2smi_render_page, pdf2smi_extract_text,
+    pdf2smi_build_all, pdf2smi_make_grid_image, pdf2smi_to_smi_bytes, pdf2smi_to_csv_bytes,
 )
+import pandas as pd
 import streamlit.components.v1 as components
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -337,9 +341,24 @@ def pdb_to_canonical_smiles(pdb_bytes: bytes):
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.sidebar.header("⚙️ Input / Options")
-input_type  = st.sidebar.selectbox("Input type", ["text", "SMI_FILE", "FILE"])
+input_type = st.sidebar.selectbox(
+    "Input type",
+    ["Paste SMILES", "Search PubChem", "Upload SMI file", "Upload 3D structure", "Upload PDF"],
+    help=(
+        "Paste SMILES — type/paste a SMILES string directly.\n"
+        "Search PubChem — type a compound name; resolved via PubChem.\n"
+        "Upload SMI file — a .smi/.txt file, one `SMILES [name]` per line.\n"
+        "Upload 3D structure — a .pdb / .mol2 / .sdf file.\n"
+        "Upload PDF — a page showing a scaffold + R-group table; build SMILES "
+        "from it, then run the same analysis as any other input."
+    ),
+)
 target_pH   = st.sidebar.slider("Target pH", 2.0, 12.0, 7.4, 0.1)
-output_name = st.sidebar.text_input("Output name", value="ligand")
+output_name = st.sidebar.text_input(
+    "Output name", value="ligand",
+    help="Base name for single-molecule inputs. Ignored for multi-molecule "
+         "batches (SMI file / PDF), which use each row's own Compound ID.",
+)
 
 st.sidebar.header("🧬 Stereochemistry")
 stereo_mode = st.sidebar.selectbox(
@@ -389,74 +408,242 @@ resolved_smiles_from_name = None
 resolved_pubchem_info     = None
 resolved_name_for_output  = None
 
-if input_type == "text":
+# Populated only by the "Upload PDF" mode — a ready-to-run .smi-format byte
+# string (built from the validated compound table) that feeds run_job()
+# exactly like a hand-uploaded SMI file would.
+pdf2smi_smi_bytes = None
+
+if input_type == "Paste SMILES":
     text_in = st.text_area(
-        "SMILES or compound name   examples: `aspirin`, `baicalein`, "
-        "`CC(=O)OC1=CC=CC=C1C(=O)O`",
+        "SMILES   example: `CC(=O)OC1=CC=CC=C1C(=O)O`",
         value="CC(=O)OC1=CC=CC=C1C(=O)O",
         height=100,
-        help=(
-            "Paste a SMILES string (used directly) or type a compound name "
-            "(looked up on PubChem). You can also write `SMILES name` to set "
-            "a custom output name."
-        ),
+        help="Paste a SMILES string. You can also write `SMILES name` to set a custom output name.",
     )
     if text_in and text_in.strip():
         token = text_in.strip().split()[0]
         if _is_smiles(token):
-            # SMILES path — pass through to run_job as-is
             smiles_text = text_in
         else:
-            # Compound name path — resolve via PubChem
-            with st.spinner(f"🔍 Looking up '{text_in.strip()}' on PubChem…"):
-                resolved_smiles_from_name, resolved_name_for_output, resolved_pubchem_info = \
-                    resolve_text_input(text_in, fallback_name=output_name or "ligand")
-            if resolved_smiles_from_name:
-                pc = resolved_pubchem_info
-                st.success(f"✅ {pc['source']}")
-                colA, colB = st.columns([2, 3])
-                with colA:
-                    st.markdown(
-                        f"- **CID:** [{pc['cid']}](https://pubchem.ncbi.nlm.nih.gov/compound/{pc['cid']})\n"
-                        f"- **IUPAC:** {pc['iupac_name'] or '—'}\n"
-                        f"- **Formula:** {pc['mf'] or '—'}\n"
-                        f"- **MW:** {pc['mw'] or '—'}"
-                    )
-                    st.code(pc["smiles"], language="text")
-                with colB:
-                    if DRAW_AVAILABLE:
-                        mol_pc = Chem.MolFromSmiles(pc["smiles"])
-                        if mol_pc:
-                            AllChem.Compute2DCoords(mol_pc)
-                            img_pc = Draw.MolToImage(mol_pc, size=(360, 260))
-                            if img_pc:
-                                st.image(img_pc, caption="2D preview (from PubChem SMILES)")
-                # Feed the resolved SMILES to run_job
-                smiles_text = pc["smiles"]
-            else:
-                # Lookup failed — show the diagnostic message
-                err_msg = (
-                    resolved_pubchem_info.get("error")
-                    if resolved_pubchem_info
-                    else f"Not found on PubChem: '{text_in.strip()}'"
+            st.error(f"❌ This doesn't look like a valid SMILES: `{token}`")
+            st.info("💡 Looking for a compound by name instead? Switch **Input type** to "
+                    "**Search PubChem**.")
+
+elif input_type == "Search PubChem":
+    name_in = st.text_input(
+        "Compound name   examples: `aspirin`, `baicalein`, `quercetin`",
+        value="aspirin",
+        help="Looked up on PubChem (name → CID → properties, with autocomplete/fuzzy fallbacks).",
+    )
+    if name_in and name_in.strip():
+        with st.spinner(f"🔍 Looking up '{name_in.strip()}' on PubChem…"):
+            resolved_smiles_from_name, resolved_name_for_output, resolved_pubchem_info = \
+                resolve_text_input(name_in, fallback_name=output_name or "ligand")
+        if resolved_smiles_from_name:
+            pc = resolved_pubchem_info
+            st.success(f"✅ {pc['source']}")
+            colA, colB = st.columns([2, 3])
+            with colA:
+                st.markdown(
+                    f"- **CID:** [{pc['cid']}](https://pubchem.ncbi.nlm.nih.gov/compound/{pc['cid']})\n"
+                    f"- **IUPAC:** {pc['iupac_name'] or '—'}\n"
+                    f"- **Formula:** {pc['mf'] or '—'}\n"
+                    f"- **MW:** {pc['mw'] or '—'}"
                 )
-                st.error(f"❌ PubChem lookup failed.\n\n{err_msg}")
-                st.info(
-                    "💡 Possible fixes:\n"
-                    "- Check spelling (e.g. `baicalein`, `quercetin`, `aspirin`)\n"
-                    "- Paste a SMILES string directly\n"
-                    "- Check your internet connection"
-                )
-elif input_type == "SMI_FILE":
+                st.code(pc["smiles"], language="text")
+            with colB:
+                if DRAW_AVAILABLE:
+                    mol_pc = Chem.MolFromSmiles(pc["smiles"])
+                    if mol_pc:
+                        AllChem.Compute2DCoords(mol_pc)
+                        img_pc = Draw.MolToImage(mol_pc, size=(360, 260))
+                        if img_pc:
+                            st.image(img_pc, caption="2D preview (from PubChem SMILES)")
+            smiles_text = pc["smiles"]
+        else:
+            err_msg = (
+                resolved_pubchem_info.get("error")
+                if resolved_pubchem_info
+                else f"Not found on PubChem: '{name_in.strip()}'"
+            )
+            st.error(f"❌ PubChem lookup failed.\n\n{err_msg}")
+            st.info(
+                "💡 Possible fixes:\n"
+                "- Check spelling (e.g. `baicalein`, `quercetin`, `aspirin`)\n"
+                "- Switch **Input type** to **Paste SMILES** and paste the structure directly\n"
+                "- Check your internet connection"
+            )
+
+elif input_type == "Upload SMI file":
     uploaded = st.file_uploader("Upload .smi file (SMILES [name] per line)", type=["smi", "txt"])
     st.info("📝 Format: `SMILES [optional_name]` per line")
-else:
+
+elif input_type == "Upload 3D structure":
     uploaded = st.file_uploader("Upload ligand file", type=["pdb", "mol2", "sdf"])
     st.info("📝 PDB files are converted to canonical SMILES via Open Babel before processing.")
 
+else:  # input_type == "Upload PDF"
+    if not _PYMUPDF_OK:
+        st.error(
+            "❌ PyMuPDF (`fitz`) is not installed on this server — the PDF→SMILES "
+            "builder is unavailable. Add `pymupdf` to `requirements.txt` and redeploy."
+        )
+    else:
+        st.markdown("#### 1 · Upload the PDF page with your scaffold + R-group table")
+        pdf_file = st.file_uploader("PDF file", type=["pdf"], key="pdf2smi_uploader")
+        if pdf_file is not None:
+            st.session_state["pdf2smi_bytes"] = pdf_file.getvalue()
+        pdf_bytes_in_state = st.session_state.get("pdf2smi_bytes")
+
+        if not pdf_bytes_in_state:
+            st.info("Upload a PDF to render it here, then describe the scaffold(s) below.")
+        else:
+            n_pages = pdf2smi_get_page_count(pdf_bytes_in_state)
+            col_a, col_b = st.columns([1, 3])
+            with col_a:
+                page_num = st.number_input("Page", min_value=1, max_value=max(n_pages, 1),
+                                            value=1, step=1, key="pdf2smi_page")
+                dpi = st.slider("Render DPI", 100, 400, 200, step=50, key="pdf2smi_dpi")
+                st.caption(f"{n_pages} page(s) in this PDF.")
+            with col_b:
+                img = pdf2smi_render_page(pdf_bytes_in_state, int(page_num), dpi)
+                st.image(img, use_container_width=True)
+            with st.expander("Extracted text layer (cross-check R-group names / IDs)"):
+                pg_text = pdf2smi_extract_text(pdf_bytes_in_state, int(page_num))
+                if pg_text:
+                    st.code(pg_text, language=None)
+                else:
+                    st.info(
+                        "No extractable text on this page — it's likely a flattened/"
+                        "outlined export. Read the compound IDs and R-group names "
+                        "visually from the image above instead."
+                    )
+
+            st.markdown("#### 2 · Describe the scaffold(s)")
+            st.caption(
+                "Dummy attachment atoms `[*:1]`, `[*:2]`, `[*:3]` mark where R1, "
+                "the fixed aryl/heteroaryl group, and R2 attach. Omit `[*:3]` "
+                "entirely for a scaffold that has no R2."
+            )
+            if "pdf2smi_templates_df" not in st.session_state:
+                st.session_state["pdf2smi_templates_df"] = pd.DataFrame(
+                    columns=["Template", "Scaffold_SMILES"])
+            st.session_state["pdf2smi_templates_df"] = st.data_editor(
+                st.session_state["pdf2smi_templates_df"], num_rows="dynamic",
+                use_container_width=True, key="pdf2smi_templates_editor",
+                column_config={
+                    "Template": st.column_config.TextColumn(required=True),
+                    "Scaffold_SMILES": st.column_config.TextColumn(required=True, width="large"),
+                },
+            )
+
+            st.markdown("#### 3 · Fragment library (named, reusable R-groups)")
+            st.caption(
+                "Each SMILES is written **attachment-atom first** "
+                "(e.g. para-hydroxyphenyl = `c1ccc(O)cc1`, not `Oc1ccccc1`)."
+            )
+            if "pdf2smi_library_df" not in st.session_state:
+                st.session_state["pdf2smi_library_df"] = pd.DataFrame(columns=["Name", "SMILES"])
+            st.session_state["pdf2smi_library_df"] = st.data_editor(
+                st.session_state["pdf2smi_library_df"], num_rows="dynamic",
+                use_container_width=True, key="pdf2smi_library_editor",
+                column_config={
+                    "Name": st.column_config.TextColumn(required=True),
+                    "SMILES": st.column_config.TextColumn(required=True),
+                },
+            )
+
+            st.markdown("#### 4 · Compounds")
+            st.caption(
+                "R1 / R2 / AR cells accept a name from the fragment library above, "
+                "*or* a raw SMILES typed directly. Leave R2 blank for scaffolds "
+                "that don't use it."
+            )
+            if "pdf2smi_compounds_df" not in st.session_state:
+                st.session_state["pdf2smi_compounds_df"] = pd.DataFrame(
+                    columns=["Compound_ID", "Template", "R1", "R2", "AR"])
+            st.session_state["pdf2smi_compounds_df"] = st.data_editor(
+                st.session_state["pdf2smi_compounds_df"], num_rows="dynamic",
+                use_container_width=True, key="pdf2smi_compounds_editor",
+                column_config={
+                    "Compound_ID": st.column_config.TextColumn(required=True),
+                    "Template": st.column_config.TextColumn(required=True),
+                    "R1": st.column_config.TextColumn(),
+                    "R2": st.column_config.TextColumn(),
+                    "AR": st.column_config.TextColumn(),
+                },
+            )
+
+            load_ex_col, build_col = st.columns(2)
+            if load_ex_col.button("📋 Load example (lignin imidazole)", use_container_width=True):
+                st.session_state["pdf2smi_templates_df"] = pd.DataFrame([
+                    {"Template": "core_2", "Scaffold_SMILES": "Cc1nc([*:1])[nH]c1[*:2]"},
+                ])
+                st.session_state["pdf2smi_library_df"] = pd.DataFrame([
+                    {"Name": "Ph", "SMILES": "c1ccccc1"},
+                    {"Name": "syringyl", "SMILES": "c1cc(OC)c(O)c(OC)c1"},
+                ])
+                st.session_state["pdf2smi_compounds_df"] = pd.DataFrame([
+                    {"Compound_ID": "2a", "Template": "core_2", "R1": "Ph", "R2": "", "AR": "syringyl"},
+                ])
+                st.rerun()
+
+            if build_col.button("✨ Build & validate", type="primary", use_container_width=True):
+                templates = dict(zip(st.session_state["pdf2smi_templates_df"]["Template"],
+                                      st.session_state["pdf2smi_templates_df"]["Scaffold_SMILES"]))
+                library = dict(zip(st.session_state["pdf2smi_library_df"]["Name"],
+                                    st.session_state["pdf2smi_library_df"]["SMILES"]))
+                result_df, mols, legends = pdf2smi_build_all(
+                    st.session_state["pdf2smi_compounds_df"], templates, library)
+                st.session_state["pdf2smi_result_df"]      = result_df
+                st.session_state["pdf2smi_result_mols"]     = mols
+                st.session_state["pdf2smi_result_legends"]  = legends
+
+            if "pdf2smi_result_df" in st.session_state:
+                result_df = st.session_state["pdf2smi_result_df"]
+                n_ok   = int((result_df["Status"] == "OK").sum()) if len(result_df) else 0
+                n_fail = len(result_df) - n_ok
+
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Compounds", len(result_df))
+                m2.metric("Validated OK", n_ok)
+                m3.metric("Failed", n_fail)
+
+                st.dataframe(result_df, use_container_width=True, hide_index=True)
+                if n_fail:
+                    st.warning("Some rows failed to build — check the Error column above.")
+
+                if st.session_state.get("pdf2smi_result_mols"):
+                    with st.expander("Structure grid preview", expanded=True):
+                        grid = pdf2smi_make_grid_image(
+                            st.session_state["pdf2smi_result_mols"],
+                            st.session_state["pdf2smi_result_legends"],
+                        )
+                        if grid:
+                            st.image(grid)
+
+                dl1, dl2 = st.columns(2)
+                dl1.download_button(
+                    "⬇️ Download .smi", data=pdf2smi_to_smi_bytes(result_df),
+                    file_name="pdf_extracted.smi", mime="text/plain", use_container_width=True,
+                )
+                dl2.download_button(
+                    "⬇️ Download .csv", data=pdf2smi_to_csv_bytes(result_df),
+                    file_name="pdf_extracted.csv", mime="text/csv", use_container_width=True,
+                )
+
+                if n_ok:
+                    pdf2smi_smi_bytes = pdf2smi_to_smi_bytes(result_df)
+                    st.success(
+                        f"✅ {n_ok} validated compound(s) ready — click "
+                        "**🚀 Run Analysis** below to send them through the full pKaNET pipeline."
+                    )
+                else:
+                    st.warning("⚠️ No validated compounds yet — fix the errors above and rebuild.")
+
 # Live PDB preview
 converted_smiles_from_pdb = None
-if input_type == "FILE" and uploaded is not None and uploaded.name.endswith(".pdb"):
+if input_type == "Upload 3D structure" and uploaded is not None and uploaded.name.endswith(".pdb"):
     pdb_bytes = uploaded.read()
     converted_smiles_from_pdb, conv_err = pdb_to_canonical_smiles(pdb_bytes)
     if conv_err:
@@ -642,14 +829,19 @@ def display_ligand_result(r: dict, idx: int = 0) -> None:
 run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
 
 if run_btn:
-    if   input_type == "text"     and not smiles_text:
-        st.error("⚠️ Please enter a SMILES string or a compound name (PubChem must resolve a name before running)")
-    elif input_type == "SMI_FILE" and not uploaded:
+    if   input_type == "Paste SMILES"      and not smiles_text:
+        st.error("⚠️ Please enter a SMILES string")
+    elif input_type == "Search PubChem"    and not smiles_text:
+        st.error("⚠️ Please enter a compound name that PubChem can resolve")
+    elif input_type == "Upload SMI file"   and not uploaded:
         st.error("⚠️ Please upload a .smi file")
-    elif input_type == "FILE"     and not uploaded:
+    elif input_type == "Upload 3D structure" and not uploaded:
         st.error("⚠️ Please upload a ligand file")
-    elif input_type == "FILE" and uploaded.name.endswith(".pdb") and converted_smiles_from_pdb is None:
+    elif input_type == "Upload 3D structure" and uploaded.name.endswith(".pdb") and converted_smiles_from_pdb is None:
         st.error("⚠️ PDB → SMILES conversion failed. Cannot proceed.")
+    elif input_type == "Upload PDF" and not pdf2smi_smi_bytes:
+        st.error("⚠️ Upload a PDF and click **✨ Build & validate** to get at least one "
+                  "validated compound before running.")
     elif not output_formats:
         st.error("⚠️ Please select at least one output format")
     else:
@@ -658,20 +850,20 @@ if run_btn:
                 with tempfile.TemporaryDirectory() as tmp:
                     tmp = Path(tmp)
 
-                    if input_type == "FILE" and converted_smiles_from_pdb:
+                    if input_type == "Upload 3D structure" and converted_smiles_from_pdb:
                         eff_type   = "SMILES"
                         eff_smiles = converted_smiles_from_pdb
                         eff_bytes  = None
                         eff_name   = None
                         st.info(f"🔄 Using SMILES from PDB: `{converted_smiles_from_pdb}`")
-                    elif input_type == "FILE":
+                    elif input_type == "Upload 3D structure":
                         eff_type   = "FILE"
                         eff_smiles = None
                         eff_bytes  = uploaded.read()
                         eff_name   = uploaded.name
-                    elif input_type == "text":
-                        # smiles_text is either a raw SMILES string (user typed SMILES)
-                        # or a PubChem-resolved SMILES (user typed a compound name).
+                    elif input_type in ("Paste SMILES", "Search PubChem"):
+                        # smiles_text is either a raw SMILES string (Paste SMILES) or a
+                        # PubChem-resolved SMILES (Search PubChem).
                         eff_type   = "SMILES"
                         eff_smiles = smiles_text
                         eff_bytes  = None
@@ -681,7 +873,13 @@ if run_btn:
                                 f"🔄 Using PubChem-resolved SMILES "
                                 f"(CID {resolved_pubchem_info['cid']}): `{smiles_text}`"
                             )
-                    else:
+                    elif input_type == "Upload PDF":
+                        eff_type   = "SMI_FILE"
+                        eff_smiles = None
+                        eff_bytes  = pdf2smi_smi_bytes
+                        eff_name   = "pdf_extracted.smi"
+                        st.info("🔄 Using SMILES built from the uploaded PDF.")
+                    else:  # "Upload SMI file"
                         eff_type   = "SMI_FILE"
                         eff_smiles = None
                         eff_bytes  = uploaded.read()
