@@ -519,6 +519,10 @@ else:  # input_type == "Upload PDF"
                         "visually from the image above instead."
                     )
 
+            if "pdf2smi_table_version" not in st.session_state:
+                st.session_state["pdf2smi_table_version"] = 0
+            _v = st.session_state["pdf2smi_table_version"]
+
             st.markdown("#### 2 · Describe the scaffold(s)")
             st.caption(
                 "Dummy attachment atoms `[*:1]`, `[*:2]`, `[*:3]` mark where R1, "
@@ -530,7 +534,7 @@ else:  # input_type == "Upload PDF"
                     columns=["Template", "Scaffold_SMILES"])
             st.session_state["pdf2smi_templates_df"] = st.data_editor(
                 st.session_state["pdf2smi_templates_df"], num_rows="dynamic",
-                use_container_width=True, key="pdf2smi_templates_editor",
+                use_container_width=True, key=f"pdf2smi_templates_editor_{_v}",
                 column_config={
                     "Template": st.column_config.TextColumn(required=True),
                     "Scaffold_SMILES": st.column_config.TextColumn(required=True, width="large"),
@@ -546,7 +550,7 @@ else:  # input_type == "Upload PDF"
                 st.session_state["pdf2smi_library_df"] = pd.DataFrame(columns=["Name", "SMILES"])
             st.session_state["pdf2smi_library_df"] = st.data_editor(
                 st.session_state["pdf2smi_library_df"], num_rows="dynamic",
-                use_container_width=True, key="pdf2smi_library_editor",
+                use_container_width=True, key=f"pdf2smi_library_editor_{_v}",
                 column_config={
                     "Name": st.column_config.TextColumn(required=True),
                     "SMILES": st.column_config.TextColumn(required=True),
@@ -564,7 +568,7 @@ else:  # input_type == "Upload PDF"
                     columns=["Compound_ID", "Template", "R1", "R2", "AR"])
             st.session_state["pdf2smi_compounds_df"] = st.data_editor(
                 st.session_state["pdf2smi_compounds_df"], num_rows="dynamic",
-                use_container_width=True, key="pdf2smi_compounds_editor",
+                use_container_width=True, key=f"pdf2smi_compounds_editor_{_v}",
                 column_config={
                     "Compound_ID": st.column_config.TextColumn(required=True),
                     "Template": st.column_config.TextColumn(required=True),
@@ -574,18 +578,78 @@ else:  # input_type == "Upload PDF"
                 },
             )
 
-            load_ex_col, build_col = st.columns(2)
-            if load_ex_col.button("📋 Load example (lignin imidazole)", use_container_width=True):
+            load_ex_col, clear_col, build_col = st.columns(3)
+            if load_ex_col.button("📋 Load example (lignin imidazoles, full set)", use_container_width=True):
                 st.session_state["pdf2smi_templates_df"] = pd.DataFrame([
-                    {"Template": "core_2", "Scaffold_SMILES": "Cc1nc([*:1])[nH]c1[*:2]"},
+                    {"Template": "core_2",    "Scaffold_SMILES": "Cc1nc([*:1])[nH]c1[*:2]"},
+                    {"Template": "core_2_ND", "Scaffold_SMILES": "Cc1nc([*:1])n([2H])c1[*:2]"},
+                    {"Template": "core_3",    "Scaffold_SMILES": "Cc1nc([*:1])n([*:3])c1[*:2]"},
                 ])
                 st.session_state["pdf2smi_library_df"] = pd.DataFrame([
-                    {"Name": "Ph", "SMILES": "c1ccccc1"},
-                    {"Name": "syringyl", "SMILES": "c1cc(OC)c(O)c(OC)c1"},
+                    {"Name": "Ph",              "SMILES": "c1ccccc1"},
+                    {"Name": "4-NMe2Ph",        "SMILES": "c1ccc(N(C)C)cc1"},
+                    {"Name": "4-OHPh",          "SMILES": "c1ccc(O)cc1"},
+                    {"Name": "2-OHPh",          "SMILES": "c1ccccc1O"},
+                    {"Name": "4-ClPh",          "SMILES": "c1ccc(Cl)cc1"},
+                    {"Name": "4-NO2Ph",         "SMILES": "c1ccc([N+](=O)[O-])cc1"},
+                    {"Name": "2-NO2Ph",         "SMILES": "c1ccccc1[N+](=O)[O-]"},
+                    {"Name": "4-Py",            "SMILES": "c1ccncc1"},
+                    {"Name": "2-Py",            "SMILES": "c1ccccn1"},
+                    {"Name": "2-thienyl",       "SMILES": "c1cccs1"},
+                    {"Name": "2-furyl",         "SMILES": "c1ccco1"},
+                    {"Name": "guaiacyl",        "SMILES": "c1ccc(O)c(OC)c1"},
+                    {"Name": "syringyl",        "SMILES": "c1cc(OC)c(O)c(OC)c1"},
+                    {"Name": "1-pyrenyl",       "SMILES": "c1ccc2ccc3cccc4ccc1c2c34"},
+                    {"Name": "cyclohexyl",      "SMILES": "C1CCCCC1"},
+                    {"Name": "1-heptyl",        "SMILES": "CCCCCCC"},
+                    {"Name": "4-MeOPh",         "SMILES": "c1ccc(OC)cc1"},
+                    {"Name": "4-BrPh",          "SMILES": "c1ccc(Br)cc1"},
+                    {"Name": "2-MeO-3-OH-4-MeOPh", "SMILES": "c1c(OC)c(O)c(OC)cc1"},
+                    {"Name": "3,4-diFPh",       "SMILES": "c1ccc(F)c(F)c1"},
+                    {"Name": "3,4-diOHPh",      "SMILES": "c1ccc(O)c(O)c1"},
+                    {"Name": "5-CH2OH-furyl",   "SMILES": "c1ccc(CO)o1"},
+                    {"Name": "2-MeO-3-OH-4-OHPh", "SMILES": "c1c(OC)c(O)c(O)cc1"},
+                    {"Name": "pyrrol-2-yl",     "SMILES": "c1ccc[nH]1"},
+                    {"Name": "indol-3-yl",      "SMILES": "c1c[nH]c2ccccc12"},
                 ])
                 st.session_state["pdf2smi_compounds_df"] = pd.DataFrame([
-                    {"Compound_ID": "2a", "Template": "core_2", "R1": "Ph", "R2": "", "AR": "syringyl"},
+                    {"Compound_ID": "2a",   "Template": "core_2",    "R1": "Ph",                    "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2a-D", "Template": "core_2_ND", "R1": "Ph",                    "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2b",   "Template": "core_2",    "R1": "4-NMe2Ph",              "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2c",   "Template": "core_2",    "R1": "4-OHPh",                "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2d",   "Template": "core_2",    "R1": "2-OHPh",                "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2e",   "Template": "core_2",    "R1": "4-ClPh",                "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2f",   "Template": "core_2",    "R1": "4-NO2Ph",               "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2g",   "Template": "core_2",    "R1": "2-NO2Ph",               "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2h",   "Template": "core_2",    "R1": "4-Py",                  "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2i",   "Template": "core_2",    "R1": "2-Py",                  "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2j",   "Template": "core_2",    "R1": "2-thienyl",             "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2k",   "Template": "core_2",    "R1": "2-furyl",               "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2l",   "Template": "core_2",    "R1": "guaiacyl",              "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2m",   "Template": "core_2",    "R1": "1-pyrenyl",             "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2n",   "Template": "core_2",    "R1": "cyclohexyl",            "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2o",   "Template": "core_2",    "R1": "1-heptyl",              "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2p",   "Template": "core_2",    "R1": "2-MeO-3-OH-4-MeOPh",    "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2q",   "Template": "core_2",    "R1": "3,4-diFPh",             "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2r",   "Template": "core_2",    "R1": "3,4-diOHPh",            "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2s",   "Template": "core_2",    "R1": "5-CH2OH-furyl",         "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2t",   "Template": "core_2",    "R1": "2-MeO-3-OH-4-OHPh",     "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2u",   "Template": "core_2",    "R1": "pyrrol-2-yl",           "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "2w",   "Template": "core_2",    "R1": "indol-3-yl",            "R2": "",      "AR": "syringyl"},
+                    {"Compound_ID": "3a",   "Template": "core_3",    "R1": "Ph",                    "R2": "4-BrPh","AR": "syringyl"},
+                    {"Compound_ID": "3b",   "Template": "core_3",    "R1": "4-MeOPh",               "R2": "Ph",    "AR": "syringyl"},
+                    {"Compound_ID": "4a",   "Template": "core_2",    "R1": "Ph",                    "R2": "",      "AR": "guaiacyl"},
                 ])
+                st.session_state["pdf2smi_table_version"] = _v + 1
+                st.rerun()
+
+            if clear_col.button("🗑️ Clear tables", use_container_width=True):
+                st.session_state["pdf2smi_templates_df"] = pd.DataFrame(
+                    columns=["Template", "Scaffold_SMILES"])
+                st.session_state["pdf2smi_library_df"] = pd.DataFrame(columns=["Name", "SMILES"])
+                st.session_state["pdf2smi_compounds_df"] = pd.DataFrame(
+                    columns=["Compound_ID", "Template", "R1", "R2", "AR"])
+                st.session_state["pdf2smi_table_version"] = _v + 1
                 st.rerun()
 
             if build_col.button("✨ Build & validate", type="primary", use_container_width=True):
