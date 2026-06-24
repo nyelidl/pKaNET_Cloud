@@ -207,15 +207,64 @@ def pdf2smi_describe_mol(mol):
     }
 
 
-def pdf2smi_build_all(compounds_df, templates, library):
+_SLOT_PATTERN = re.compile(r"\[\*:(\d+)\]")
+
+
+def pdf2smi_count_scaffold_slots(scaffold_smiles):
+    """How many distinct [*:n] attachment points a scaffold SMILES declares
+    (i.e. max slot number found — slots are expected to be numbered 1..N
+    with no gaps)."""
+    nums = [int(m.group(1)) for m in _SLOT_PATTERN.finditer(scaffold_smiles)]
+    return max(nums) if nums else 0
+
+
+def pdf2smi_parse_slot_roles(roles_str, n_slots):
+    """
+    Turn a Slot_Roles string like "R1,AR,R2" into a list of per-slot role
+    names, one entry per [*:n] slot (1-indexed: roles[0] is the role for
+    slot 1, etc.).
+
+    The SAME role name can appear more than once — e.g. "R1,R2,R1,R2" means
+    slots 1 and 3 both take the value of column "R1", slots 2 and 4 both
+    take the value of column "R2". This is how a fragment gets attached at
+    more than one equivalent position on a symmetric scaffold (e.g. the
+    same NR1R2 amide on both arms of a catechol bis-ether).
+
+    Blank/None roles_str falls back to the legacy default ["R1", "AR", "R2"]
+    truncated/padded to n_slots, preserving old behavior for templates that
+    don't specify Slot_Roles at all.
+    """
+    # Treat None and pandas/NumPy NaN (a truthy float!) as "blank" so an
+    # empty Slot_Roles cell in a data_editor table falls back to the
+    # legacy default instead of being parsed as the literal string "nan".
+    if roles_str is None or (isinstance(roles_str, float) and roles_str != roles_str):
+        roles_str = ""
+    roles_str = str(roles_str).strip()
+
+    if roles_str:
+        roles = [r.strip() for r in roles_str.split(",") if r.strip()]
+    else:
+        roles = ["R1", "AR", "R2"]
+    if len(roles) < n_slots:
+        roles = roles + [None] * (n_slots - len(roles))
+    return roles[:n_slots]
+
+
+def pdf2smi_build_all(compounds_df, templates, library, template_roles=None):
     """
     Batch-build a compound table into validated molecules.
 
-    compounds_df columns expected: Compound_ID, Template, R1, R2, AR
-    (R2 may be blank for scaffolds that don't use a third slot)
+    compounds_df columns expected: Compound_ID, Template, R1, R2, AR (extra
+    role columns are fine too — see template_roles below)
 
-    templates : {template_name: scaffold_smiles_with_dummy_atoms}
-    library   : {fragment_name: attachment_first_smiles}
+    templates       : {template_name: scaffold_smiles_with_dummy_atoms}
+    library         : {fragment_name: attachment_first_smiles}
+    template_roles  : {template_name: "R1,AR,R2"} (optional) — maps each
+        [*:n] slot in that template's scaffold to a Compounds-table column
+        name, in slot order. Omit a template here (or leave its string
+        blank) to get the legacy default mapping (slot1=R1, slot2=AR,
+        slot3=R2). Repeat a role name to attach the same fragment at more
+        than one slot (symmetric scaffolds).
 
     Returns (result_df, mols_for_grid, legends_for_grid). result_df has
     columns Compound_ID, SMILES, Formula, MW, Status, Error.
@@ -225,6 +274,7 @@ def pdf2smi_build_all(compounds_df, templates, library):
     except ImportError:
         raise ImportError("pandas is required for pdf2smi_build_all()")
 
+    template_roles = template_roles or {}
     rows = []
     mols_for_grid = []
     legends_for_grid = []
@@ -241,12 +291,16 @@ def pdf2smi_build_all(compounds_df, templates, library):
                               Status="FAILED", Error=f"Unknown template name: {tmpl_name!r}"))
             continue
 
-        slot_fragments = {
-            1: pdf2smi_resolve_fragment(row.get("R1"), library),
-            2: pdf2smi_resolve_fragment(row.get("AR"), library),
-            3: pdf2smi_resolve_fragment(row.get("R2"), library),
-        }
-        slot_fragments = {k: v for k, v in slot_fragments.items() if v is not None}
+        n_slots = pdf2smi_count_scaffold_slots(scaffold)
+        role_list = pdf2smi_parse_slot_roles(template_roles.get(tmpl_name), n_slots)
+
+        slot_fragments = {}
+        for slot_idx, role in enumerate(role_list, start=1):
+            if not role:
+                continue
+            val = pdf2smi_resolve_fragment(row.get(role), library)
+            if val is not None:
+                slot_fragments[slot_idx] = val
 
         mol, err = pdf2smi_build_molecule(scaffold, slot_fragments)
         if mol is None:
