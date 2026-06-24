@@ -4,3 +4,4 @@ dimorphite-dl==2.0.2
 requests
 pandas
 Pillow
+pymupdf>=1.24
