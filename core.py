@@ -756,6 +756,11 @@ _IONIZABLE_SITE_DEF = [
     ("amine_beta_EWG",             "[NX3;H1,H2;!$(NC=O);!$([nH]);$([NX3][CX4][CX4][$([CX3](=O)),$([SX4](=O)(=O)),$(C#N)])]", 8.0, "base"),
     # Fluoroalkyl-adjacent amine: strongly suppressed by induction
     ("amine_fluoroalkyl",          "[NX3;H1,H2;!$(NC=O);!$([nH]);$([NX3][CX4][$([CX4](F)(F)),$([CX4](F)(F)F)])]", 6.5, "base"),
+    # Gamma-ring-sulfonyl amine: amine on a saturated ring carbon γ to a ring
+    # sulfone/sulfonyl.  Inductive withdrawal through the locked ring strongly
+    # suppresses amine pKa (dorzolamide exp 6.35, brinzolamide exp 5.9).
+    # Must precede generic aliphatic_amine (pKa 9.5).
+    ("amine_gamma_ring_sulfonyl",  "[NX3;H1,H2;!$(NC=O);!$([nH])][CX4;R][CX4;R][CX4;R][SX4;R](=O)(=O)", 6.5, "base"),
     ("aliphatic_amine",            "[NX3;H1,H2;!$(NC=O);!$(N~[!#6;!H]);!$([nH]);!$([NX3][CX3](=[NX2])[NX3])]",        9.5,  "base"),
     # Tertiary aliphatic amine: pKa ~8.5 (trimethylamine=9.8 but multi-subst. lowers; v80 recalibrated)
     ("aliphatic_amine_t",          "[NX3;H0;!$(NC=O);!$(Nc);!$([nH]);!$([N]~[!#6]);!$([NX3]([CX4][CX3]=O)[CX4][CX3]=O)]",    8.5,  "base"),
