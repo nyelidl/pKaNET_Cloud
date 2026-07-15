@@ -1091,7 +1091,7 @@ if run_btn:
                                 else:
                                     st.warning(w)
 
-                    with st.expander("📊 Summary", expanded=True):
+                    with st.expander("📊 Summary", expanded=False):
                         st.text(out["summary_text"])
 
                     st.header("📈 Results")
