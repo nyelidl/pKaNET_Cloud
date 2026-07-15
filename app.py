@@ -903,8 +903,21 @@ def display_ligand_result(r: dict, idx: int = 0) -> None:
     # Microstate table
     top_microstates = r.get("top_microstates", [])
     if top_microstates:
-        with st.expander(f"📊 Ranked microstate table (top {len(top_microstates)})", expanded=True):
-            show_microstate_table(top_microstates)
+        default_show = 5
+        n_total = len(top_microstates)
+        with st.expander(f"📊 Ranked microstate table ({n_total} states)", expanded=True):
+            if n_total > default_show:
+                show_all = st.checkbox(
+                    f"Show all {n_total} microstates",
+                    value=False,
+                    key=f"show_all_micro_{idx}",
+                )
+                display_list = top_microstates if show_all else top_microstates[:default_show]
+                if not show_all:
+                    st.caption(f"Showing top {default_show} of {n_total} — tick the box above to see all.")
+            else:
+                display_list = top_microstates
+            show_microstate_table(display_list)
         if r.get("microstate_csv") and Path(r["microstate_csv"]).exists():
             st.download_button(
                 "⬇️ Download microstate CSV",
