@@ -1,4 +1,4 @@
-# core.py  —  pKaNET Cloud+  (v80 — calibrated heuristic + fast predict API)
+# core.py  —  pKaNET Cloud+  (v81 — calibrated heuristic + fast predict API)
 #
 # ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
@@ -18,6 +18,8 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, rdMolDescriptors, Descriptors
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
 from rdkit.Chem.MolStandardize import rdMolStandardize
+
+__version__ = "81"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -59,27 +61,9 @@ except ImportError:
     _dimorphite_fn = None; _DIMORPHITE_OK = False
     print("⚠️  dimorphite-dl not available.")
 
-_PKASOLVER_OK = False; _PROPKA_OK = False; _UNIPKA_OK = False; _PKA_BACKEND = "none"
-
-try:
-    from pkasolver.query import QueryModel as _PkaSolverModel  # noqa
-    _PKASOLVER_OK = True; _PKA_BACKEND = "pkasolver"; print("✅  pkasolver available.")
-except ImportError:
-    pass
-
-if not _PKASOLVER_OK:
-    try:
-        import propka.run as _propka_run  # noqa
-        _PROPKA_OK = True; _PKA_BACKEND = "propka"; print("✅  propka available.")
-    except ImportError:
-        pass
-
-if not _PKASOLVER_OK and not _PROPKA_OK:
-    if subprocess.run(["which", "unipka"], capture_output=True).returncode == 0:
-        _UNIPKA_OK = True; _PKA_BACKEND = "unipka_cli"; print("✅  unipka CLI available.")
-
-if _PKA_BACKEND == "none":
-    print("ℹ️  No ML pKa backend — heuristic ionizable-site table will be used.")
+_PKASOLVER_OK = False; _PROPKA_OK = False; _UNIPKA_OK = False
+_PKA_BACKEND = "heuristic"
+print("ℹ️  ML pKa backends disabled — heuristic ionizable-site table will be used.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Open Babel helper
@@ -713,6 +697,11 @@ _IONIZABLE_SITE_DEF = [
     ("enol_cyclic_dicarbonyl",       "[OX2H1][CX3;R]=[CX3;R][CX3;R]=O",                   5.5,  "acid"),
     # Open-chain 1,3-dicarbonyl enol: acetylacetone (pKa~8.9), ethyl acetoacetate.
     ("enol_1_3_dicarbonyl",        "[OX2H1][CX3]=[CX3][CX3]=O",                           9.0,  "acid"),
+    # ── Oxime acids ──────────────────────────────────────────────────────────
+    # Oxime R₂C=N-OH: pKa ~8-12. Aryl oximes lower (~8-9), alkyl higher (~10-12).
+    # Must precede phenol to claim O-H first.
+    ("oxime_aryl",                 "[OX2H1][NX2]=[CX3][c]",                               9.0,  "acid"),
+    ("oxime",                      "[OX2H1][NX2]=[CX3]",                                  11.0, "acid"),
     # ── Phenols (Bug F fix: catechol_OH before phenol_ortho_CO) ──────────────
     # Catechol with adjacent EWG: pKa ~8.0 (nitrocatechol ~7.2-8.0)
     ("catechol_EWG_OH",            "[OX2H1][c;R]:[c;R][OX2H1][$([NX3+](=O)[O-]),$([NX3](=O)=O),$(C#N),$([CX3]=O)]", 8.0, "acid"),
@@ -761,6 +750,11 @@ _IONIZABLE_SITE_DEF = [
     # suppresses amine pKa (dorzolamide exp 6.35, brinzolamide exp 5.9).
     # Must precede generic aliphatic_amine (pKa 9.5).
     ("amine_gamma_ring_sulfonyl",  "[NX3;H1,H2;!$(NC=O);!$([nH])][CX4;R][CX4;R][CX4;R][SX4;R](=O)(=O)", 6.5, "base"),
+    # Hydrazine: N-N bond drastically reduces basicity (pKa 2-5 vs 9.5 for plain amine).
+    # Match the more protonated terminal nitrogen before generic aliphatic amines.
+    ("hydrazine_aryl",             "[NX3;H2;!$(NC=O);$([NX3;H2][NX3]c)]",                 5.0, "base"),
+    ("hydrazine_terminal",         "[NX3;H2;!$(NC=O);$([NX3;H2][NX3;!$([NX3]c)])]",       3.5, "base"),
+    ("hydrazine_secondary",        "[NX3;H1;!$(NC=O);$([NX3;H1][NX3;H1;!$(NC=O)])]",      4.0, "base"),
     ("aliphatic_amine",            "[NX3;H1,H2;!$(NC=O);!$(N~[!#6;!H]);!$([nH]);!$([NX3][CX3](=[NX2])[NX3])]",        9.5,  "base"),
     # Tertiary aliphatic amine: pKa ~8.5 (trimethylamine=9.8 but multi-subst. lowers; v80 recalibrated)
     ("aliphatic_amine_t",          "[NX3;H0;!$(NC=O);!$(Nc);!$([nH]);!$([N]~[!#6]);!$([NX3]([CX4][CX3]=O)[CX4][CX3]=O)]",    8.5,  "base"),
@@ -1689,6 +1683,14 @@ def _supplement_dimorphite(tautomer_smiles, dimorphite_results, ion_sites, targe
 def generate_ranked_microstates(base_smiles, target_ph=7.4, ph_window=1.0, max_tautomers=8, top_n=5, pubchem_result=None):
     if pubchem_result is None: pubchem_result = {}
     ref_mol = Chem.MolFromSmiles(base_smiles)
+    # Preserve explicitly charged input states through enumeration, except
+    # aromatic resonance cations whose written charge is not a reliable net
+    # physiological protonation assignment.
+    input_canon = canonicalize(base_smiles)
+    input_charge = Chem.GetFormalCharge(ref_mol) if ref_mol is not None else 0
+    input_has_aromatic_charge = bool(ref_mol and any(
+        a.GetIsAromatic() and a.GetFormalCharge() != 0 for a in ref_mol.GetAtoms()))
+    preserve_input_state = bool(ref_mol and input_canon and not input_has_aromatic_charge)
     kept, disc, tr_flag, tr_motifs = enumerate_and_filter_tautomers(base_smiles, max_states=max_tautomers)
     if disc:
         print(f"   🔬  Discarded {len(disc)} implausible tautomers (e.g. score={disc[0]['score']:.1f}: {disc[0]['smiles'][:55]})")
@@ -1744,6 +1746,10 @@ def generate_ranked_microstates(base_smiles, target_ph=7.4, ph_window=1.0, max_t
                 **{f"score_{k}": v for k, v in bd.items()},
                 **{f"taut_{k}":  v for k, v in taut["breakdown"].items()},
             })
+    if preserve_input_state:
+        for row in all_micro:
+            if row["microstate_smiles"] == input_canon:
+                row["selection_score"] += 5.0 if input_charge != 0 else 0.0
     if not all_micro: return [], False, [], tr_flag, tr_motifs, ml_preds
     all_micro.sort(key=lambda x: (-x["selection_score"], abs(x["net_charge"]), x["tautomer_rank"], x["microstate_smiles"]))
     best_sc = all_micro[0]["selection_score"]
@@ -2111,7 +2117,231 @@ def zip_all_outputs(out_dir, zip_path):
     return str(zp)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# v80 PUBLIC FAST-PREDICT API
+# ─────────────────────────────────────────────────────────────────────────────
+# v81 Hammett / Taft substituent pKa corrections
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Taft σ* values for α-substituents on aliphatic amines.
+# Each entry: (SMARTS for the α-neighbor fragment, σ* value).
+# Ordered most-specific-first; first match wins per neighbor atom.
+_TAFT_SIGMA_STAR_DEF = [
+    ("[CX4](F)(F)F",          +2.65),  # –CF₃
+    ("[CX4](F)(F)[!F]",       +2.05),  # –CHF₂
+    ("[CX3](=O)O",            +1.65),  # ester / carboxyl
+    ("[CX3](=O)[NX3]",        +1.50),  # amide C(=O)N
+    ("[CX3;!$(C(=O)O);!$(C(=O)N)](=O)", +1.65),  # ketone / aldehyde
+    ("[SX4](=O)(=O)",         +1.30),  # sulfonyl
+    ("C#N",                   +1.30),  # nitrile
+    ("[F,Cl,Br,I]",           +1.10),  # halogen directly on α-C
+    ("[NX3;H1,H2;!$(NC=O)]",  +0.85),  # hydrazine N-N (adjacent amine)
+    ("[c]",                   +0.60),  # aryl (phenyl etc.)
+    ("[OX2H1]",               +0.56),  # hydroxyl
+    ("[OX2;!H1]",             +0.52),  # ether O-R
+    ("[NX3;!$(NC=O)]",        +0.30),  # amino (non-amide)
+]
+_TAFT_SIGMA_STAR_COMPILED = []
+for _sma_t, _sig_t in _TAFT_SIGMA_STAR_DEF:
+    _pat_t = Chem.MolFromSmarts(_sma_t)
+    if _pat_t is not None:
+        _TAFT_SIGMA_STAR_COMPILED.append((_pat_t, _sig_t))
+    else:
+        print(f"⚠️  Taft SMARTS compile failed: {_sma_t}")
+
+_RHO_STAR_AMINE = 3.0  # Taft ρ* for aliphatic amines
+
+
+def _taft_corrected_amine_pka(mol, n_idx, base_pka=9.5):
+    """Compute Taft-corrected pKa for an aliphatic amine.
+
+    Walks α-substituents on the nitrogen atom and sums σ* contributions.
+    corrected_pKa = base_pKa − ρ* × Σ(σ*_i)
+
+    Only applies EWG corrections (σ* > 0); alkyl EDGs are ignored to avoid
+    raising pKa beyond the already-calibrated base value.
+    """
+    atom = mol.GetAtomWithIdx(n_idx)
+    if atom.GetAtomicNum() != 7:
+        return base_pka
+
+    sigma_sum = 0.0
+    for nb in atom.GetNeighbors():
+        if nb.GetAtomicNum() == 1:
+            continue  # skip explicit H
+        # Check each α-substituent against Taft patterns (first match wins)
+        matched = False
+        for pat_t, sigma_t in _TAFT_SIGMA_STAR_COMPILED:
+            # Check if the neighbor atom matches any atom position in the pattern
+            for m in mol.GetSubstructMatches(pat_t):
+                if nb.GetIdx() in m:
+                    if sigma_t > 0:  # only EWG corrections
+                        sigma_sum += sigma_t
+                    matched = True
+                    break
+            if matched:
+                break
+
+    if sigma_sum <= 0:
+        return base_pka  # no EWG effect
+
+    corrected = base_pka - _RHO_STAR_AMINE * sigma_sum
+    return max(corrected, -2.0)  # floor at -2
+
+
+# Hammett σ values for ring substituents on phenols.
+# Each entry: (SMARTS, σ_para, σ_meta).
+# ortho treated as σ_para (simplified; includes some steric effect).
+_HAMMETT_SIGMA_PHENOL_DEF = [
+    ("[NX3+](=O)[O-]",   +0.78, +0.71),  # nitro
+    ("N(=O)=O",           +0.78, +0.71),  # nitro (alt representation)
+    ("C#N",               +0.66, +0.56),  # cyano
+    ("[SX4](=O)(=O)",     +0.72, +0.56),  # sulfonyl
+    ("C(F)(F)F",          +0.54, +0.43),  # CF3
+    ("[CX3](=O)",         +0.50, +0.38),  # carbonyl (ketone, aldehyde, acid)
+    ("F",                 +0.06, +0.34),  # fluorine
+    ("Cl",                +0.23, +0.37),  # chlorine
+    ("Br",                +0.23, +0.39),  # bromine
+    ("I",                 +0.18, +0.35),  # iodine
+    ("[OX2;!H1][#6]",    -0.27, +0.12),  # ether OR
+    ("[OX2H1]",          -0.37, +0.12),  # hydroxyl OH
+    ("[NX3;H1,H2;!$(NC=O)]", -0.66, -0.16),  # amino NH₂/NHR
+]
+_HAMMETT_SIGMA_PHENOL_COMPILED = []
+for _sma_h, _sp, _sm in _HAMMETT_SIGMA_PHENOL_DEF:
+    _pat_h = Chem.MolFromSmarts(_sma_h)
+    if _pat_h is not None:
+        _HAMMETT_SIGMA_PHENOL_COMPILED.append((_pat_h, _sp, _sm))
+    else:
+        print(f"⚠️  Hammett SMARTS compile failed: {_sma_h}")
+
+_RHO_PHENOL = 2.23  # Hammett ρ for phenol ionization
+
+
+def _get_ring_position(mol, oh_ring_c_idx, subst_c_idx):
+    """Determine whether a substituent is ortho, meta, or para to OH on a 6-ring.
+
+    Returns 'ortho', 'meta', 'para', or None if not on same ring.
+    """
+    ring_info = mol.GetRingInfo()
+    for ring in ring_info.AtomRings():
+        if len(ring) != 6:
+            continue
+        if oh_ring_c_idx not in ring or subst_c_idx not in ring:
+            continue
+        # Find shortest path around the ring
+        ring_list = list(ring)
+        try:
+            pos_oh = ring_list.index(oh_ring_c_idx)
+            pos_sub = ring_list.index(subst_c_idx)
+        except ValueError:
+            continue
+        dist = min(abs(pos_oh - pos_sub), 6 - abs(pos_oh - pos_sub))
+        if dist == 1:
+            return "ortho"
+        elif dist == 2:
+            return "meta"
+        elif dist == 3:
+            return "para"
+    return None
+
+
+def _hammett_corrected_phenol_pka(mol, oh_idx, base_pka=10.0):
+    """Compute Hammett-corrected pKa for a phenol.
+
+    Walks all substituents on the aromatic ring bearing the OH and sums
+    σ contributions based on position (ortho/meta/para).
+    corrected_pKa = base_pKa − ρ × Σ(σ_i)
+
+    Handles two kinds of EWG effects:
+      1. Exocyclic substituents (NO₂, CN, C=O, halogens, etc.)
+      2. Ring-member heteroatom cations (n+, N+, S+) — these contribute
+         large σ ≈ +1.0 (position-dependent) and are the dominant driver
+         for phenol deprotonation near pyridinium/ammonium cations.
+
+    Only applies EWG corrections (positive σ sum); EDG corrections are
+    ignored to avoid raising pKa above the base value.
+    """
+    oh_atom = mol.GetAtomWithIdx(oh_idx)
+    # Find the aromatic ring carbon bonded to OH
+    ring_c = None
+    for nb in oh_atom.GetNeighbors():
+        if nb.GetIsAromatic() and nb.GetAtomicNum() == 6:
+            ring_c = nb
+            break
+    if ring_c is None:
+        return base_pka
+
+    ring_c_idx = ring_c.GetIdx()
+
+    # Find which 6-membered aromatic ring this C belongs to
+    ring_info = mol.GetRingInfo()
+    target_ring = None
+    for ring in ring_info.AtomRings():
+        if len(ring) == 6 and ring_c_idx in ring:
+            if all(mol.GetAtomWithIdx(i).GetIsAromatic() for i in ring):
+                target_ring = ring
+                break
+    if target_ring is None:
+        return base_pka
+
+    sigma_sum = 0.0
+
+    # Walk each ring atom (excluding the OH-bearing carbon)
+    for r_idx in target_ring:
+        if r_idx == ring_c_idx:
+            continue
+        r_atom = mol.GetAtomWithIdx(r_idx)
+
+        # ── (A) Ring-member heteroatom cation contribution ───────────
+        # A positively charged N or S IN the ring acts as a very strong
+        # EWG.  Observed pKa shifts for hydroxypyridiniums are 3-5 units,
+        # corresponding to effective σ ≈ 1.5-2.0 (not the standard
+        # Hammett σ for external ammonium groups).
+        if r_atom.GetFormalCharge() > 0:
+            position = _get_ring_position(mol, ring_c_idx, r_idx)
+            _CATION_SIGMA = 1.80  # ρ × 1.80 = 2.23 × 1.80 ≈ 4.0 shift
+            if position == "para":
+                sigma_sum += _CATION_SIGMA * r_atom.GetFormalCharge()
+            elif position == "meta":
+                sigma_sum += 1.60 * r_atom.GetFormalCharge()
+            elif position == "ortho":
+                sigma_sum += _CATION_SIGMA * r_atom.GetFormalCharge()
+
+        # ── (B) Exocyclic substituent contributions ──────────────────
+        for nb in r_atom.GetNeighbors():
+            nb_idx = nb.GetIdx()
+            if nb_idx in target_ring:
+                continue  # skip ring neighbors
+            if nb_idx == oh_idx:
+                continue  # skip the OH itself
+
+            position = _get_ring_position(mol, ring_c_idx, r_idx)
+            if position is None:
+                continue
+
+            # Match against Hammett σ patterns (first match wins)
+            for pat_h, sigma_para, sigma_meta in _HAMMETT_SIGMA_PHENOL_COMPILED:
+                for m in mol.GetSubstructMatches(pat_h):
+                    if nb_idx in m:
+                        if position == "para":
+                            sigma_sum += sigma_para
+                        else:  # ortho and meta
+                            sigma_sum += sigma_meta
+                        break
+                else:
+                    continue
+                break  # first pattern match wins
+
+    if sigma_sum <= 0:
+        return base_pka  # no net EWG effect
+
+    corrected = base_pka - _RHO_PHENOL * sigma_sum
+    return max(corrected, 0.0)  # floor at 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v81 PUBLIC FAST-PREDICT API
+
+# v81 PUBLIC FAST-PREDICT API
 # ─────────────────────────────────────────────────────────────────────────────
 
 def heuristic_net_charge(smiles: str, ph: float = 7.4) -> int | None:
@@ -2129,14 +2359,135 @@ def heuristic_net_charge(smiles: str, ph: float = 7.4) -> int | None:
         return None
 
     sites = find_ionizable_sites(mol)
+
+    # ── v81 Hammett/Taft substituent pKa corrections ─────────────────────
+    # Apply BEFORE Henderson-Hasselbalch scoring.  These correct the flat
+    # heuristic pKa using additive σ/σ* substituent contributions.
+    #
+    # Hammett is applied ONLY to plain "phenol" (pKa=10.0).  EWG phenol
+    # variants (phenol_EWG pKa=8.0, phenol_para_EWG pKa=7.8, etc.) already
+    # have reduced pKa from their SMARTS rule.  Applying Hammett on top
+    # would double-count the substituent effect.
+    for site in sites:
+        label = str(site.get("label", "")).lower()
+        # Taft correction for aliphatic amines
+        if label in ("aliphatic_amine", "aliphatic_amine_t"):
+            n_idx = site["atom_indices"][0]
+            base_pka = float(site.get("heuristic_pka", 9.5))
+            corrected = _taft_corrected_amine_pka(mol, n_idx, base_pka)
+            if corrected < base_pka:
+                site["_corrected_pka"] = corrected
+        # Hammett correction for plain phenol only (pKa=10.0 baseline)
+        elif label == "phenol":
+            oh_idx = site["atom_indices"][0]
+            base_pka = float(site.get("heuristic_pka", 10.0))
+            corrected = _hammett_corrected_phenol_pka(mol, oh_idx, base_pka)
+            if corrected < base_pka:
+                site["_corrected_pka"] = corrected
+
+    # ── Permanent (structural) charges ────────────────────────────────────
+    # Quaternary ammonium N+, pyridinium n+, sulfonium S+, etc. are encoded
+    # in the input SMILES but are NOT ionizable — find_ionizable_sites does
+    # not claim them.  Count formal charges on atoms that no site claimed.
+    #
+    # N-oxide fix: [O-] bonded to [n+] or [N+](=O) is part of the n-oxide
+    # coordinated pair and should NOT count as independent permanent charge.
+    # Identify n-oxide O⁻ atoms so they can be excluded.
+    noxide_o_minus = set()
+    for atom in mol.GetAtoms():
+        if atom.GetAtomicNum() == 8 and atom.GetFormalCharge() == -1:
+            for nb in atom.GetNeighbors():
+                if nb.GetAtomicNum() == 7 and nb.GetFormalCharge() == +1:
+                    noxide_o_minus.add(atom.GetIdx())
+                    break
+
+    claimed_atoms = set()
+    for site in sites:
+        claimed_atoms.update(site.get("atom_indices", []))
+
+    perm_pos_atoms = []   # indices of unclaimed permanently-charged atoms
+    permanent_charge = 0
+    for atom in mol.GetAtoms():
+        fc = atom.GetFormalCharge()
+        if fc != 0 and atom.GetIdx() not in claimed_atoms:
+            # Skip n-oxide O⁻ (paired with n+, not independent charge)
+            if atom.GetIdx() in noxide_o_minus:
+                continue
+            # Also skip the n+ of an n-oxide pair (it's a zwitterionic pair, net 0)
+            if (atom.GetAtomicNum() == 7 and fc == +1
+                    and any(nb.GetIdx() in noxide_o_minus for nb in atom.GetNeighbors())):
+                continue
+            permanent_charge += fc
+            if fc > 0:
+                perm_pos_atoms.append(atom.GetIdx())
+
+    # ── Ring-cation pKa correction ────────────────────────────────────────
+    # A permanent cation (n+, N+, S+) on an aromatic ring inductively lowers
+    # the pKa of weak acids (phenol, hydroxamic acid, etc.) on the same ring
+    # system by ~3-5 units.  Without this correction, pKaNET keeps phenol at
+    # pKa 10.0 → neutral, giving +1 instead of the correct zwitterion (0).
+    # Apply correction BEFORE Henderson-Hasselbalch scoring.
+    if perm_pos_atoms:
+        ring_info = mol.GetRingInfo()
+        all_rings = [set(r) for r in ring_info.AtomRings()] if ring_info else []
+        # Build ring-system map: merge rings that share atoms
+        def _ring_system_for(aidx):
+            system = set()
+            queue = [r for r in all_rings if aidx in r]
+            while queue:
+                ring = queue.pop()
+                if ring <= system:
+                    continue
+                system |= ring
+                queue.extend(r for r in all_rings if r & system and not r <= system)
+            return system
+
+        perm_ring_systems = set()
+        for pidx in perm_pos_atoms:
+            perm_ring_systems |= _ring_system_for(pidx)
+
+        if perm_ring_systems:
+            _CATION_PKA_SHIFT = -4.0  # inductive/resonance effect of ring cation
+            for site in sites:
+                if site["site_type"] != "acid":
+                    continue
+                site_atoms = site.get("atom_indices", [])
+                # Check if the acid site atom OR any of its neighbors is on
+                # the same ring system as the permanent cation.  Phenol O is
+                # exocyclic (not in the ring itself) but bonded to a ring C.
+                on_ring_system = False
+                for aidx in site_atoms:
+                    if aidx in perm_ring_systems:
+                        on_ring_system = True; break
+                    for nb in mol.GetAtomWithIdx(aidx).GetNeighbors():
+                        if nb.GetIdx() in perm_ring_systems:
+                            on_ring_system = True; break
+                    if on_ring_system:
+                        break
+                if not on_ring_system:
+                    continue
+                # For plain phenol sites that already have a Hammett
+                # _corrected_pka (which includes ring-cation σ), skip the
+                # ad-hoc shift — Hammett already handles the cation effect
+                # with position-dependent accuracy.
+                # For all other acid sites (EWG phenols, hydroxamic acid,
+                # etc.), apply the flat -4.0 shift as before.
+                label = str(site.get("label", "")).lower()
+                if label == "phenol" and "_corrected_pka" in site:
+                    continue  # Hammett already handled this
+                orig_pka = float(site.get("heuristic_pka", 14.0))
+                if orig_pka > ph:
+                    site["_corrected_pka"] = orig_pka + _CATION_PKA_SHIFT
+
     if not sites:
-        return 0
+        return max(-6, min(6, permanent_charge))
 
     acid_charge = 0
     base_charge = 0
 
     for site in sites:
-        pka   = float(site.get("heuristic_pka", 7.4))
+        # Use ring-cation-corrected pKa if available
+        pka   = float(site.get("_corrected_pka", site.get("heuristic_pka", 7.4)))
         stype = site.get("site_type", "acid")
         label = str(site.get("label", "")).lower()
 
@@ -2153,21 +2504,20 @@ def heuristic_net_charge(smiles: str, ph: float = 7.4) -> int | None:
             else:
                 base_charge += 1
 
-    # ── Multi-site charge caps (mirrors _expected_net_charge_from_sites) ────
-    # Cap 1: polyamine with no counterbalancing acid → at most +2 for 3+ strong
-    # bases, +1 otherwise.
+    # ── Multi-site charge caps ────────────────────────────────────────────
+    # Cap 1: polyamine with no counterbalancing acid → at most +2 for 3+
+    # strong bases, +1 otherwise.
     if acid_charge == 0 and base_charge > 1:
         n_strong_base = sum(
             1 for s in sites
             if s.get("site_type") == "base"
             and float(s.get("heuristic_pka", 0)) - ph > 2.0
         )
-        base_charge = min(base_charge, 2) if n_strong_base >= 3 else 1
+        max_base = 2 if n_strong_base >= 3 else 1
+        base_charge = min(base_charge, max_base)
 
-    # Cap 2: multi-acid with no counterbalancing base → cap at the number of
-    # acid sites whose pKa is CLEARLY below ph (pKa < ph − 1.5). Sites that
-    # are borderline (within 1.5 units) are unlikely to be simultaneously fully
-    # deprotonated in solution.
+    # Cap 2: multi-acid with no counterbalancing base → cap at the number
+    # of acid sites whose pKa is CLEARLY below ph (pKa < ph − 1.5).
     if base_charge == 0 and acid_charge < -1:
         n_clear_acid = sum(
             1 for s in sites
@@ -2177,7 +2527,7 @@ def heuristic_net_charge(smiles: str, ph: float = 7.4) -> int | None:
         )
         acid_charge = max(acid_charge, -max(n_clear_acid, 1))
 
-    return max(-6, min(6, acid_charge + base_charge))
+    return max(-6, min(6, acid_charge + base_charge + permanent_charge))
 
 
 def predict_charge(
