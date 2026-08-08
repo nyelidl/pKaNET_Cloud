@@ -379,7 +379,7 @@ def pdb_to_canonical_smiles(pdb_bytes: bytes):
 st.sidebar.header("⚙️ Input / Options")
 input_type = st.sidebar.selectbox(
     "Input type",
-    ["Paste SMILES", "Search PubChem", "Upload SMI file", "Upload 3D structure"],
+    ["Paste SMILES", "Search PubChem", "Upload SMI file", "Upload 3D structure", "Upload PDF / Image"],
     help=(
         "Paste SMILES — type/paste a SMILES string directly.\n"
         "Search PubChem — type a compound name; resolved via PubChem.\n"
@@ -519,7 +519,7 @@ elif input_type == "Upload 3D structure":
     uploaded = st.file_uploader("Upload ligand file", type=["pdb", "mol2", "sdf"])
     st.info("📝 PDB files are converted to canonical SMILES via Open Babel before processing.")
 
-else: input_type == "Upload PDF / Image"
+else:  # input_type == "Upload PDF / Image"
     st.markdown("#### 1 · Upload the PDF page or image with your scaffold + R-group table")
     pdf_file = st.file_uploader(
         "PDF or image file (PDF / PNG / JPG / WEBP / HEIC)",
