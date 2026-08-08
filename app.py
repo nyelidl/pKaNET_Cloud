@@ -38,33 +38,6 @@ except (ImportError, OSError):
         def MolToImage(*a, **kw):
             return None
 
-# ---- cached wrappers for the "Upload PDF / Image" preview -------------------
-# Streamlit reruns the whole script on every widget interaction (including each
-# keystroke in the data editors further down), so wrap the expensive read-only
-# file operations in st.cache_data to avoid re-rendering the PDF / re-decoding
-# the image every time. Keyed on the raw file bytes, so a new upload busts the
-# cache automatically.
-@st.cache_data(show_spinner=False)
-def _pdf2smi_page_count_cached(pdf_bytes: bytes) -> int:
-    return pdf2smi_get_page_count(pdf_bytes)
-
-@st.cache_data(show_spinner=False)
-def _pdf2smi_render_cached(pdf_bytes: bytes, page: int, dpi: int):
-    return pdf2smi_render_page(pdf_bytes, page, dpi)
-
-@st.cache_data(show_spinner=False)
-def _pdf2smi_text_cached(pdf_bytes: bytes, page: int) -> str:
-    return pdf2smi_extract_text(pdf_bytes, page)
-
-@st.cache_data(show_spinner=False)
-def _pdf2smi_open_image_cached(img_bytes: bytes):
-    from PIL import ImageOps
-    im = Image.open(io.BytesIO(img_bytes))
-    im = ImageOps.exif_transpose(im)      # honor iPhone/camera rotation tags
-    if im.mode not in ("RGB", "RGBA"):
-        im = im.convert("RGB")
-    return im
-
 _LOGO_URL = (
     "https://raw.githubusercontent.com/nyelidl/pKaNET_Cloud"
     "/30b7d67ba323099789fbb4f4e597cb7ab9f8495d/pKaN2.svg"
@@ -379,7 +352,7 @@ def pdb_to_canonical_smiles(pdb_bytes: bytes):
 st.sidebar.header("⚙️ Input / Options")
 input_type = st.sidebar.selectbox(
     "Input type",
-    ["Paste SMILES", "Search PubChem", "Upload SMI file", "Upload 3D structure", "Upload PDF / Image"],
+    ["Paste SMILES", "Search PubChem", "Upload SMI file", "Upload 3D structure"],
     help=(
         "Paste SMILES — type/paste a SMILES string directly.\n"
         "Search PubChem — type a compound name; resolved via PubChem.\n"
@@ -526,17 +499,9 @@ else:  # input_type == "Upload PDF / Image"
         type=["pdf", "png", "jpg", "jpeg", "webp", "heic", "heif"],
         key="pdf2smi_uploader",
     )
-
-    # Persist the upload across the many reruns the editors below trigger, and
-    # drop any stale build results when a *different* file is loaded (otherwise
-    # a results table from a previous file can silently outlive its image).
     if pdf_file is not None:
-        if pdf_file.name != st.session_state.get("pdf2smi_filename"):
-            for _k in ("pdf2smi_result_df", "pdf2smi_result_mols", "pdf2smi_result_legends"):
-                st.session_state.pop(_k, None)
         st.session_state["pdf2smi_bytes"]    = pdf_file.getvalue()
         st.session_state["pdf2smi_filename"] = pdf_file.name
-
     pdf_bytes_in_state = st.session_state.get("pdf2smi_bytes")
     filename_in_state  = st.session_state.get("pdf2smi_filename", "")
     is_pdf = filename_in_state.lower().endswith(".pdf")
@@ -551,20 +516,18 @@ else:  # input_type == "Upload PDF / Image"
         )
     else:
         if is_pdf:
-            n_pages = max(_pdf2smi_page_count_cached(pdf_bytes_in_state), 1)
+            n_pages = pdf2smi_get_page_count(pdf_bytes_in_state)
             col_a, col_b = st.columns([1, 3])
             with col_a:
-                page_num = st.number_input("Page", min_value=1, max_value=n_pages,
+                page_num = st.number_input("Page", min_value=1, max_value=max(n_pages, 1),
                                             value=1, step=1, key="pdf2smi_page")
-                page_num = min(int(page_num), n_pages)   # clamp a value left over from a longer PDF
                 dpi = st.slider("Render DPI", 100, 400, 200, step=50, key="pdf2smi_dpi")
                 st.caption(f"{n_pages} page(s) in this PDF.")
             with col_b:
-                with st.spinner("Rendering page…"):
-                    img = _pdf2smi_render_cached(pdf_bytes_in_state, page_num, int(dpi))
+                img = pdf2smi_render_page(pdf_bytes_in_state, int(page_num), dpi)
                 st.image(img, use_container_width=True)
             with st.expander("Extracted text layer (cross-check R-group names / IDs)"):
-                pg_text = _pdf2smi_text_cached(pdf_bytes_in_state, page_num)
+                pg_text = pdf2smi_extract_text(pdf_bytes_in_state, int(page_num))
                 if pg_text:
                     st.code(pg_text, language=None)
                 else:
@@ -575,7 +538,7 @@ else:  # input_type == "Upload PDF / Image"
                     )
         else:
             try:
-                img = _pdf2smi_open_image_cached(pdf_bytes_in_state)
+                img = Image.open(io.BytesIO(pdf_bytes_in_state))
                 st.image(img, use_container_width=True)
                 st.caption(f"{filename_in_state} · {img.size[0]}×{img.size[1]} px")
             except Exception as e:
