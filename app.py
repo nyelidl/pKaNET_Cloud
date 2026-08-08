@@ -519,7 +519,7 @@ elif input_type == "Upload 3D structure":
     uploaded = st.file_uploader("Upload ligand file", type=["pdb", "mol2", "sdf"])
     st.info("📝 PDB files are converted to canonical SMILES via Open Babel before processing.")
 
-else:  # input_type == "Upload PDF / Image"
+else: input_type == "Upload PDF / Image"
     st.markdown("#### 1 · Upload the PDF page or image with your scaffold + R-group table")
     pdf_file = st.file_uploader(
         "PDF or image file (PDF / PNG / JPG / WEBP / HEIC)",
