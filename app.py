@@ -359,17 +359,12 @@ def pdb_to_canonical_smiles(pdb_bytes: bytes):
 st.sidebar.header("⚙️ Input / Options")
 input_type = st.sidebar.selectbox(
     "Input type",
-    ["Paste SMILES", "Search PubChem", "Upload SMI file", "Upload 3D structure", "Convert to SMILES"],
+    ["Paste SMILES", "Search PubChem", "Upload SMI file", "Upload 3D structure"],
     help=(
         "Paste SMILES — type/paste a SMILES string directly.\n"
         "Search PubChem — type a compound name; resolved via PubChem.\n"
         "Upload SMI file — a .smi/.txt file, one `SMILES [name]` per line.\n"
-        "Upload 3D structure — a .pdb / .mol2 / .sdf file.\n"
-        "Convert to SMILES — paste names / InChI / SMILES (one per line), or an "
-        "image/PDF; each line is auto-routed to the right converter.\n"
-        "Upload PDF / Image — a PDF page or a photo/screenshot showing a "
-        "scaffold + R-group table; build SMILES from it, then run the same "
-        "analysis as any other input."
+        "Upload 3D structure — a .pdb / .mol2 / .sdf file."
     ),
 )
 target_pH   = st.sidebar.slider("Target pH", 2.0, 12.0, 7.4, 0.1)
