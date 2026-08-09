@@ -3,3 +3,4 @@ libxext6
 libsm6
 libice6
 openbabel
+default-jre

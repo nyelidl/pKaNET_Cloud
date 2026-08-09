@@ -14,7 +14,14 @@ from core import (
     _PYMUPDF_OK,
     pdf2smi_get_page_count, pdf2smi_render_page, pdf2smi_extract_text,
     pdf2smi_build_all, pdf2smi_make_grid_image, pdf2smi_to_smi_bytes, pdf2smi_to_csv_bytes,
+    make_structure_grid_image, parse_smi_lines,
 )
+
+try:
+    import struct2smi
+    _STRUCT2SMI_OK = True
+except Exception:
+    _STRUCT2SMI_OK = False
 import pandas as pd
 from PIL import Image
 
@@ -352,12 +359,14 @@ def pdb_to_canonical_smiles(pdb_bytes: bytes):
 st.sidebar.header("⚙️ Input / Options")
 input_type = st.sidebar.selectbox(
     "Input type",
-    ["Paste SMILES", "Search PubChem", "Upload SMI file", "Upload 3D structure"],
+    ["Paste SMILES", "Search PubChem", "Upload SMI file", "Upload 3D structure", "Convert to SMILES"],
     help=(
         "Paste SMILES — type/paste a SMILES string directly.\n"
         "Search PubChem — type a compound name; resolved via PubChem.\n"
         "Upload SMI file — a .smi/.txt file, one `SMILES [name]` per line.\n"
         "Upload 3D structure — a .pdb / .mol2 / .sdf file.\n"
+        "Convert to SMILES — paste names / InChI / SMILES (one per line), or an "
+        "image/PDF; each line is auto-routed to the right converter.\n"
         "Upload PDF / Image — a PDF page or a photo/screenshot showing a "
         "scaffold + R-group table; build SMILES from it, then run the same "
         "analysis as any other input."
@@ -422,22 +431,39 @@ resolved_name_for_output  = None
 # string (built from the validated compound table) that feeds run_job()
 # exactly like a hand-uploaded SMI file would.
 pdf2smi_smi_bytes = None
+paste_smi_bytes = None      # multi-line "Paste SMILES" -> routed through the SMI_FILE path
+paste_smi_records = None    # parsed (smiles, name) records, for the overview grid
+struct2smi_records = None   # resolved (smiles, name) from struct2smi (name/InChI/image)
+struct2smi_bytes = None
 
 if input_type == "Paste SMILES":
     text_in = st.text_area(
-        "SMILES   example: `CC(=O)OC1=CC=CC=C1C(=O)O`",
+        "SMILES   (one per line for a batch)   example: `CC(=O)OC1=CC=CC=C1C(=O)O`",
         value="CC(=O)OC1=CC=CC=C1C(=O)O",
-        height=100,
-        help="Paste a SMILES string. You can also write `SMILES name` to set a custom output name.",
+        height=120,
+        help="Paste one SMILES per line. Each line may be `SMILES name` to set a custom "
+             "name. A single line runs one molecule; multiple lines run as a batch.",
     )
     if text_in and text_in.strip():
-        token = text_in.strip().split()[0]
-        if _is_smiles(token):
-            smiles_text = text_in
-        else:
-            st.error(f"❌ This doesn't look like a valid SMILES: `{token}`")
+        recs = [(smi, nm) for smi, nm in parse_smi_lines(text_in) if _is_smiles(smi)]
+        n_bad = len([ln for ln in text_in.splitlines()
+                     if ln.strip() and not ln.strip().startswith("#")]) - len(recs)
+        if not recs:
+            st.error("❌ No valid SMILES found in the box.")
             st.info("💡 Looking for a compound by name instead? Switch **Input type** to "
                     "**Search PubChem**.")
+        elif len(recs) == 1:
+            smiles_text = text_in.strip()            # single molecule -> existing path
+            if n_bad:
+                st.warning(f"⚠️ Ignored {n_bad} line(s) that weren't valid SMILES.")
+        else:
+            smiles_text = text_in.strip()            # truthy -> passes the run guard
+            paste_smi_records = recs
+            paste_smi_bytes = ("\n".join(f"{smi}\t{nm}" for smi, nm in recs) + "\n").encode("utf-8")
+            msg = f"✅ Parsed {len(recs)} SMILES — will run as a batch."
+            if n_bad:
+                msg += f"  (ignored {n_bad} invalid line(s))"
+            st.caption(msg)
 
 elif input_type == "Search PubChem":
     name_in = st.text_input(
@@ -491,6 +517,48 @@ elif input_type == "Upload SMI file":
 elif input_type == "Upload 3D structure":
     uploaded = st.file_uploader("Upload ligand file", type=["pdb", "mol2", "sdf"])
     st.info("📝 PDB files are converted to canonical SMILES via Open Babel before processing.")
+
+elif input_type == "Convert to SMILES":
+    st.markdown("#### Convert names / InChI / SMILES (or an image) → SMILES")
+    if not _STRUCT2SMI_OK:
+        st.error("❌ struct2smi.py is not available on the server.")
+    else:
+        _bk = struct2smi.available_backends()
+        st.caption(
+            "Backends — name→structure (OPSIN): "
+            + ("✅" if _bk["name_opsin"] else "❌ add py2opsin + a JRE")
+            + "  ·  image OCSR: "
+            + ("✅" if _bk["image_ocsr"] else "❌ stub (use the manual PDF/Image mode)")
+        )
+        conv_text = st.text_area(
+            "One per line: chemical name, InChI, or SMILES (optionally `SMILES name`)",
+            height=140,
+            help="Each line is auto-routed: SMILES/InChI resolve locally; names need "
+                 "OPSIN; images use OCSR (currently stubbed).",
+        )
+        conv_file = st.file_uploader(
+            "…or an image / PDF (OCSR — experimental, currently stubbed)",
+            type=["png", "jpg", "jpeg", "webp", "pdf"], key="struct2smi_file",
+        )
+        if (conv_text and conv_text.strip()) or conv_file is not None:
+            _res = struct2smi.convert(
+                text=conv_text if (conv_text and conv_text.strip()) else None,
+                file_bytes=conv_file.getvalue() if conv_file is not None else None,
+                filename=conv_file.name if conv_file is not None else None,
+            )
+            st.dataframe(
+                pd.DataFrame([{"input": r.raw, "name": r.name, "kind": r.kind,
+                               "status": r.status, "SMILES": r.smiles or "",
+                               "note": r.note} for r in _res]),
+                use_container_width=True, hide_index=True,
+            )
+            struct2smi_records = struct2smi.ok_records(_res)
+            if struct2smi_records:
+                struct2smi_bytes = struct2smi.records_to_smi_bytes(_res)
+                st.success(f"✅ {len(struct2smi_records)} structure(s) resolved and ready.")
+            else:
+                st.warning("No structures resolved yet — names need OPSIN, images need "
+                           "an OCSR backend.")
 
 else:  # input_type == "Upload PDF / Image"
     st.markdown("#### 1 · Upload the PDF page or image with your scaffold + R-group table")
@@ -1001,6 +1069,29 @@ def display_ligand_result(r: dict, idx: int = 0) -> None:
 # Run button
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ---- Combined 2D structure overview (R/S annotated) for list inputs ----
+_grid_records = None
+if input_type == "Upload SMI file" and uploaded is not None:
+    try:
+        _grid_records = parse_smi_lines(uploaded.getvalue().decode("utf-8", errors="replace"))
+    except Exception:
+        _grid_records = None
+elif input_type == "Paste SMILES" and paste_smi_records and len(paste_smi_records) > 1:
+    _grid_records = paste_smi_records
+elif input_type == "Convert to SMILES" and struct2smi_records:
+    _grid_records = struct2smi_records
+
+if _grid_records:
+    _n_grid = len(_grid_records)
+    with st.expander(f"🧪 Structure overview — {_n_grid} molecule(s), R/S annotated", expanded=True):
+        _grid_img = make_structure_grid_image(_grid_records, max_mols=60)
+        if _grid_img is not None:
+            st.image(_grid_img, use_container_width=True)
+            if _n_grid > 60:
+                st.caption(f"Showing the first 60 of {_n_grid} structures.")
+        else:
+            st.info("No valid structures to display.")
+
 run_btn = st.button("🚀 Run Analysis", type="primary", use_container_width=True)
 
 if run_btn:
@@ -1017,6 +1108,9 @@ if run_btn:
     elif input_type == "Upload PDF / Image" and not pdf2smi_smi_bytes:
         st.error("⚠️ Upload a PDF and click **✨ Build & validate** to get at least one "
                   "validated compound before running.")
+    elif input_type == "Convert to SMILES" and not struct2smi_bytes:
+        st.error("⚠️ Provide at least one resolvable name / InChI / SMILES "
+                  "(or a supported image).")
     elif not output_formats:
         st.error("⚠️ Please select at least one output format")
     else:
@@ -1036,6 +1130,12 @@ if run_btn:
                         eff_smiles = None
                         eff_bytes  = uploaded.read()
                         eff_name   = uploaded.name
+                    elif input_type == "Paste SMILES" and paste_smi_bytes:
+                        eff_type   = "SMI_FILE"
+                        eff_smiles = None
+                        eff_bytes  = paste_smi_bytes
+                        eff_name   = "pasted.smi"
+                        st.info(f"🔄 Running {len(paste_smi_records)} pasted SMILES as a batch.")
                     elif input_type in ("Paste SMILES", "Search PubChem"):
                         # smiles_text is either a raw SMILES string (Paste SMILES) or a
                         # PubChem-resolved SMILES (Search PubChem).
@@ -1048,6 +1148,12 @@ if run_btn:
                                 f"🔄 Using PubChem-resolved SMILES "
                                 f"(CID {resolved_pubchem_info['cid']}): `{smiles_text}`"
                             )
+                    elif input_type == "Convert to SMILES":
+                        eff_type   = "SMI_FILE"
+                        eff_smiles = None
+                        eff_bytes  = struct2smi_bytes
+                        eff_name   = "struct2smi.smi"
+                        st.info(f"🔄 Running {len(struct2smi_records)} converted structure(s).")
                     elif input_type == "Upload PDF / Image":
                         eff_type   = "SMI_FILE"
                         eff_smiles = None

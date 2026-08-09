@@ -309,6 +309,61 @@ def pdf2smi_make_grid_image(mols, legends, mols_per_row=5, sub_size=(220, 200)):
     return Draw.MolsToGridImage(mols, molsPerRow=mols_per_row, subImgSize=sub_size, legends=legends)
 
 
+def make_structure_grid_image(records, mols_per_row=5, sub_size=(240, 220),
+                              add_stereo=True, number=True, max_mols=60):
+    """Render a list of molecules as ONE combined 2D grid image (PIL).
+
+    records    : iterable of SMILES strings, or (smiles, name) tuples.
+    add_stereo : annotate CIP R/S descriptors on stereocentres (the R/S labels).
+    number     : prefix each legend with its running index ("1. name").
+    max_mols   : cap how many structures are drawn into the single image.
+    Returns a PIL.Image, or None if nothing valid was found.
+    """
+    from rdkit.Chem import Draw
+    try:
+        from rdkit.Chem import rdCIPLabeler
+        _cip = True
+    except Exception:
+        _cip = False
+
+    mols, legends = [], []
+    for i, rec in enumerate(records, start=1):
+        if isinstance(rec, (tuple, list)):
+            smi = rec[0]
+            name = rec[1] if len(rec) > 1 and rec[1] else f"mol_{i:03d}"
+        else:
+            smi, name = rec, f"mol_{i:03d}"
+        mol = Chem.MolFromSmiles(smi) if smi else None
+        if mol is None:
+            continue
+        AllChem.Compute2DCoords(mol)
+        if add_stereo:
+            try:
+                Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
+                if _cip:
+                    rdCIPLabeler.AssignCIPLabels(mol)   # proper CIP R/S labels
+            except Exception:
+                pass
+        legends.append(f"{i}. {name}" if number else str(name))
+        mols.append(mol)
+        if len(mols) >= max_mols:
+            break
+
+    if not mols:
+        return None
+
+    try:
+        opts = Draw.rdMolDraw2D.MolDrawOptions()
+        if add_stereo:
+            opts.addStereoAnnotation = True
+        return Draw.MolsToGridImage(mols, molsPerRow=mols_per_row,
+                                    subImgSize=sub_size, legends=legends,
+                                    drawOptions=opts)
+    except Exception:
+        return Draw.MolsToGridImage(mols, molsPerRow=mols_per_row,
+                                    subImgSize=sub_size, legends=legends)
+
+
 def pdf2smi_to_smi_bytes(result_df):
     """Render validated rows of a pdf2smi_build_all() result as .smi-format
     bytes (SMILES<tab>name per line) — the same shape run_job() already
