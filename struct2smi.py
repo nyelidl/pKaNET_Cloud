@@ -172,7 +172,7 @@ def handle_image(file_bytes: bytes, filename: str = "image") -> List[StructResul
     if _ocsr_available():
         try:
             out = []
-            for i, smi in enumerate(_ocsr_backend(file_bytes), start=1):
+            for i, smi in enumerate(_ocsr_backend(file_bytes, filename), start=1):
                 smi = _normalize(smi)
                 out.append(StructResult(f"{filename}_{i:03d}", KIND_IMAGE,
                                         "ok" if smi else "failed", smiles=smi,
@@ -183,21 +183,142 @@ def handle_image(file_bytes: bytes, filename: str = "image") -> List[StructResul
             return [StructResult(filename, KIND_IMAGE, "failed", raw=filename,
                                  note=f"OCSR error: {e}")]
     return [StructResult(filename, KIND_IMAGE, "needs_review", raw=filename,
-                         note="OCSR backend not installed. Either implement "
-                              "_ocsr_backend() with DECIMER/MolScribe, or use the "
-                              "manual scaffold+R-group entry in 'Upload PDF / Image'.")]
+                         note="OCSR backend not installed. On a capable host run "
+                              "`pip install -r requirements-ocsr.txt` (DECIMER) — it "
+                              "won't run on Streamlit Cloud. Or use the manual "
+                              "scaffold+R-group entry in the 'Upload PDF / Image' mode.")]
 
 
-# -- OCSR plug-in point (implement later) ------------------------------------
+# -- OCSR (image/PDF -> SMILES) via DECIMER: optional & LAZILY imported -------
+# DECIMER (TensorFlow-based) is HEAVY and downloads model weights on first use.
+# It is deliberately NOT imported at module load: the module stays lightweight
+# and deployable, and DECIMER is only touched when an image is actually handled.
+# Install it separately (see requirements-ocsr.txt) on a capable host --
+# it will NOT build/run on Streamlit Community Cloud.
+import importlib.util as _ilu
+
+_decimer_predict = None
+_decimer_loaded = False
+_segmenter = None
+_segmenter_loaded = False
+
+
+def _ocsr_installed() -> bool:
+    """Cheap check (NO heavy import): is DECIMER importable? Used for the UI
+    status caption so we don't load TensorFlow just to render a page."""
+    try:
+        return _ilu.find_spec("DECIMER") is not None
+    except Exception:
+        return False
+
+
+def _load_decimer():
+    """Lazily import DECIMER.predict_SMILES (loads TensorFlow -- slow, first call
+    only; downloads model weights on first prediction)."""
+    global _decimer_predict, _decimer_loaded
+    if not _decimer_loaded:
+        _decimer_loaded = True
+        try:
+            from DECIMER import predict_SMILES
+            _decimer_predict = predict_SMILES
+        except Exception:
+            _decimer_predict = None
+    return _decimer_predict
+
+
+def _load_segmenter():
+    """Optional DECIMER-Segmentation: splits a multi-structure figure into single
+    structures BEFORE OCSR. If absent, the whole page is treated as one structure
+    (fine for an isolated single-molecule image, wrong for a grid/figure)."""
+    global _segmenter, _segmenter_loaded
+    if not _segmenter_loaded:
+        _segmenter_loaded = True
+        try:
+            from decimer_segmentation import segment_chemical_structures
+            _segmenter = segment_chemical_structures
+        except Exception:
+            _segmenter = None
+    return _segmenter
+
+
 def _ocsr_available() -> bool:
-    """Return True once a real OCSR engine is wired into _ocsr_backend()."""
-    return False
+    return _ocsr_installed()
 
-def _ocsr_backend(image_bytes: bytes):                  # pragma: no cover -- stub
-    """Plug DECIMER / MolScribe here. Should yield one SMILES per detected
-    structure in the image/PDF. Kept out of the import graph so the module stays
-    lightweight until an OCSR engine is actually installed."""
-    raise NotImplementedError("Wire DECIMER/MolScribe here and yield SMILES.")
+
+def _pdf_to_images(pdf_bytes: bytes, dpi: int = 300):
+    """Rasterize PDF pages to numpy RGB arrays via PyMuPDF (already a dependency)."""
+    import io as _io
+    import fitz                                   # PyMuPDF
+    import numpy as np
+    from PIL import Image
+    imgs = []
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        for page in doc:
+            pix = page.get_pixmap(dpi=dpi)
+            im = Image.open(_io.BytesIO(pix.tobytes("png"))).convert("RGB")
+            imgs.append(np.array(im))
+    finally:
+        doc.close()
+    return imgs
+
+
+def _ocsr_backend(image_bytes: bytes, filename: str = "image"):
+    """Real OCSR. image/PDF bytes -> list[SMILES].
+    Pipeline: (PDF -> raster pages) -> (optional segmentation into single
+    structures) -> DECIMER predict_SMILES per structure. Returns [] on total
+    failure. NOTE: OCSR reads DRAWN single structures; it does NOT parse a
+    scaffold + R-group *table* (Markush) -- that still needs the manual/enumerate
+    path in the 'Upload PDF / Image' mode."""
+    predict = _load_decimer()
+    if predict is None:
+        raise RuntimeError("DECIMER not importable (install `decimer`)")
+
+    import io as _io
+    import os
+    import tempfile
+    import numpy as np
+    from PIL import Image
+
+    is_pdf = (filename or "").lower().endswith(".pdf") or image_bytes[:5] == b"%PDF-"
+
+    # 1) page image(s) as numpy RGB arrays
+    if is_pdf:
+        page_imgs = _pdf_to_images(image_bytes)
+    else:
+        page_imgs = [np.array(Image.open(_io.BytesIO(image_bytes)).convert("RGB"))]
+
+    # 2) segment each page into single-structure crops (if segmenter installed)
+    seg = _load_segmenter()
+    structure_imgs = []
+    for pim in page_imgs:
+        if seg is not None:
+            try:
+                crops = seg(pim)                 # list of numpy arrays
+                structure_imgs.extend(list(crops) if len(crops) else [pim])
+            except Exception:
+                structure_imgs.append(pim)
+        else:
+            structure_imgs.append(pim)           # no segmenter -> whole page = 1
+
+    # 3) OCSR each structure image (DECIMER wants a file path)
+    smiles_out = []
+    for arr in structure_imgs:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+            Image.fromarray(arr.astype("uint8")).save(tf.name)
+            p = tf.name
+        try:
+            smi = predict(p)
+            if smi:
+                smiles_out.append(smi)
+        except Exception:
+            pass
+        finally:
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
+    return smiles_out
 
 
 # -- abbreviation dictionary (for future OCSR condensed-label expansion) -----
