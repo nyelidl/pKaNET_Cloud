@@ -392,3 +392,94 @@ def available_backends() -> dict:
     """Report which handlers are actually live (so the UI can show status)."""
     return {"smiles": True, "inchi": True,
             "name_opsin": _opsin_works(), "image_ocsr": _ocsr_available()}
+
+
+# ── Markush enumeration (lightweight; RDKit only) ────────────────────────────
+# Reads a scaffold with ONE attachment point + a table of R-groups, and builds
+# one molecule per row. This is the deployable path for the "scaffold + R-group
+# table" figures OCSR can't handle. No heavy deps.
+RGROUP_SHORTHAND = {
+    "Me": "C", "CH3": "C", "Et": "CC", "C2H5": "CC",
+    "Pr": "CCC", "nPr": "CCC", "n-Pr": "CCC", "C3H7": "CCC", "iPr": "C(C)C", "i-Pr": "C(C)C",
+    "Bu": "CCCC", "nBu": "CCCC", "C4H9": "CCCC", "tBu": "C(C)(C)C", "t-Bu": "C(C)(C)C",
+    "OMe": "OC", "OCH3": "OC", "OEt": "OCC", "OBu": "OCCCC", "OnBu": "OCCCC",
+    "OtBu": "OC(C)(C)C", "OC(CH3)3": "OC(C)(C)C", "OiPr": "OC(C)C",
+    "F": "F", "Cl": "Cl", "Br": "Br", "I": "I",
+    "CF3": "C(F)(F)F", "OCF3": "OC(F)(F)F",
+    "NO2": "[N+](=O)[O-]", "CN": "C#N", "OH": "O", "NH2": "N", "SH": "S",
+    "COOH": "C(=O)O", "CO2H": "C(=O)O", "COOEt": "C(=O)OCC", "CHO": "C=O",
+    "Ac": "C(C)=O", "COCH3": "C(C)=O", "NHAc": "NC(C)=O", "NHCOCH3": "NC(C)=O",
+    "Ph": "c1ccccc1", "OPh": "Oc1ccccc1", "Bn": "Cc1ccccc1",
+    "SMe": "SC", "NMe2": "N(C)C", "N(CH3)2": "N(C)C",
+}
+_H_VALUES = {"H", "h", "-", "", "H2"}
+
+
+def _strip_dummies(mol):
+    """Delete dummy atom(s); their neighbour picks up an implicit H (used for R=H)."""
+    rw = Chem.RWMol(mol)
+    for idx in sorted([a.GetIdx() for a in rw.GetAtoms() if a.GetAtomicNum() == 0], reverse=True):
+        rw.RemoveAtom(idx)
+    m = rw.GetMol()
+    Chem.SanitizeMol(m)
+    return m
+
+
+def _frag_to_attachment(value):
+    """R-group text -> attachment fragment '[*:1]<body>' (or None if unparseable)."""
+    v = value.strip()
+    body = RGROUP_SHORTHAND.get(v) or RGROUP_SHORTHAND.get(v.replace(" ", ""))
+    if body is None:
+        body = v                          # assume it's already a SMILES fragment
+    frag = "[*:1]" + body
+    return frag if Chem.MolFromSmiles(frag) is not None else None
+
+
+def _normalize_scaffold(scaffold):
+    """Unify the attachment placeholder to [*:1]."""
+    s = scaffold or ""
+    for p in ("{R}", "[R]", "[*]", "[*:1]"):
+        s = s.replace(p, "[*:1]")
+    return s
+
+
+def enumerate_markush(scaffold, table_text):
+    """scaffold : SMILES with exactly ONE attachment point ([*:1] / [*] / [R] / {R}).
+    table_text : one 'compound_id  R-group' per line (extra columns after R are ignored).
+    Returns list[StructResult] (kind='markush')."""
+    scaf_smi = _normalize_scaffold(scaffold)
+    scaf = Chem.MolFromSmiles(scaf_smi)
+    n_dummy = sum(1 for a in scaf.GetAtoms() if a.GetAtomicNum() == 0) if scaf else 0
+    if scaf is None or n_dummy != 1:
+        return [StructResult("scaffold", "markush", "failed", raw=scaffold or "",
+                note="scaffold must be a valid SMILES with exactly ONE attachment "
+                     "point written as [*:1], [*], [R] or {R}.")]
+
+    results = []
+    for line in table_text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        cid = parts[0]
+        rval = parts[1] if len(parts) > 1 else ""
+        if rval in _H_VALUES:
+            smi = _normalize(Chem.MolToSmiles(_strip_dummies(scaf)))
+            results.append(StructResult(cid, "markush", "ok" if smi else "failed",
+                                        smiles=smi, raw=line,
+                                        note="" if smi else "H enumeration failed"))
+            continue
+        frag = _frag_to_attachment(rval)
+        if frag is None:
+            results.append(StructResult(cid, "markush", "failed", raw=line,
+                                        note=f"could not parse R-group '{rval}'"))
+            continue
+        try:
+            prod = Chem.molzip(scaf, Chem.MolFromSmiles(frag))
+            smi = _normalize(Chem.MolToSmiles(prod))
+        except Exception:
+            smi = None
+        results.append(StructResult(cid, "markush", "ok" if smi else "failed",
+                                    smiles=smi, raw=line,
+                                    note="" if smi else "enumeration failed"))
+    return results
