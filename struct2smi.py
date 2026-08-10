@@ -199,6 +199,7 @@ import importlib.util as _ilu
 
 _decimer_predict = None
 _decimer_loaded = False
+_decimer_error = None
 _segmenter = None
 _segmenter_loaded = False
 
@@ -215,14 +216,15 @@ def _ocsr_installed() -> bool:
 def _load_decimer():
     """Lazily import DECIMER.predict_SMILES (loads TensorFlow -- slow, first call
     only; downloads model weights on first prediction)."""
-    global _decimer_predict, _decimer_loaded
+    global _decimer_predict, _decimer_loaded, _decimer_error
     if not _decimer_loaded:
         _decimer_loaded = True
         try:
             from DECIMER import predict_SMILES
             _decimer_predict = predict_SMILES
-        except Exception:
+        except Exception as e:
             _decimer_predict = None
+            _decimer_error = f"{type(e).__name__}: {e}"
     return _decimer_predict
 
 
@@ -248,7 +250,7 @@ def _ocsr_available() -> bool:
 def _pdf_to_images(pdf_bytes: bytes, dpi: int = 300):
     """Rasterize PDF pages to numpy RGB arrays via PyMuPDF (already a dependency)."""
     import io as _io
-    import fitz                                   # PyMuPDF
+    import pymupdf as fitz                        # (was `import fitz` — deprecated alias)
     import numpy as np
     from PIL import Image
     imgs = []
@@ -272,7 +274,12 @@ def _ocsr_backend(image_bytes: bytes, filename: str = "image"):
     path in the 'Upload PDF / Image' mode."""
     predict = _load_decimer()
     if predict is None:
-        raise RuntimeError("DECIMER not importable (install `decimer`)")
+        if _ocsr_installed():
+            raise RuntimeError(
+                "DECIMER is installed but failed to import — " + (_decimer_error or "unknown") +
+                ". Most often a NumPy 2.x vs TensorFlow ABI clash: pin `numpy<2` "
+                "in the requirements you deploy, then restart.")
+        raise RuntimeError("DECIMER not installed (pip install -r requirements-ocsr.txt)")
 
     import io as _io
     import os
