@@ -359,7 +359,7 @@ def pdb_to_canonical_smiles(pdb_bytes: bytes):
 st.sidebar.header("⚙️ Input / Options")
 input_type = st.sidebar.selectbox(
     "Input type",
-    ["Paste SMILES", "Search PubChem", "Upload SMI file", "Upload 3D structure", "Convert to SMILES"],
+    ["Paste SMILES", "Search PubChem", "Upload SMI file", "Upload 3D structure", "Convert to SMILES", "Markush → enumerate"],
     help=(
         "Paste SMILES — type/paste a SMILES string directly.\n"
         "Search PubChem — type a compound name; resolved via PubChem.\n"
@@ -367,6 +367,8 @@ input_type = st.sidebar.selectbox(
         "Upload 3D structure — a .pdb / .mol2 / .sdf file.\n"
         "Convert to SMILES — paste names / InChI / SMILES (one per line), or an "
         "image/PDF; each line is auto-routed to the right converter.\n"
+        "Markush → enumerate — one scaffold (with an [*:1] attachment point) + an "
+        "R-group table; builds every compound.\n"
         "Upload PDF / Image — a PDF page or a photo/screenshot showing a "
         "scaffold + R-group table; build SMILES from it, then run the same "
         "analysis as any other input."
@@ -435,6 +437,8 @@ paste_smi_bytes = None      # multi-line "Paste SMILES" -> routed through the SM
 paste_smi_records = None    # parsed (smiles, name) records, for the overview grid
 struct2smi_records = None   # resolved (smiles, name) from struct2smi (name/InChI/image)
 struct2smi_bytes = None
+markush_records = None      # enumerated (smiles, name) from a scaffold + R-group table
+markush_bytes = None
 
 if input_type == "Paste SMILES":
     text_in = st.text_area(
@@ -559,6 +563,46 @@ elif input_type == "Convert to SMILES":
             else:
                 st.warning("No structures resolved yet — names need OPSIN, images need "
                            "an OCSR backend.")
+
+elif input_type == "Markush → enumerate":
+    st.markdown("#### Scaffold + R-group table → enumerate SMILES")
+    if not _STRUCT2SMI_OK:
+        st.error("❌ struct2smi.py is not available on the server.")
+    else:
+        mk_scaffold = st.text_input(
+            "Scaffold SMILES — mark the R-group position with [*:1]  (or [R] / {R})",
+            value="CCOC(=O)c1ccc(NS(=O)(=O)c2ccc([*:1])cc2)cc1",
+            help="Type the core once; put the attachment placeholder where the R-group goes.",
+        )
+        _mk_scaf = (Chem.MolFromSmiles(struct2smi._normalize_scaffold(mk_scaffold))
+                    if mk_scaffold else None)
+        if _mk_scaf is not None and DRAW_AVAILABLE:
+            AllChem.Compute2DCoords(_mk_scaf)
+            _mk_img = Draw.MolToImage(_mk_scaf, size=(340, 240))
+            if _mk_img is not None:
+                st.image(_mk_img, caption="Scaffold — the * marks where each R-group attaches")
+        elif mk_scaffold:
+            st.warning("⚠️ Scaffold is not valid, or it does not have exactly one attachment point.")
+        mk_table = st.text_area(
+            "R-group table — one `compound_id  R-group` per line (extra columns ignored)",
+            value="JLK011 H\nKT001 OCH3\nJLK002 Br\nJLK012 NO2\nJLK003 NHCOCH3",
+            height=160,
+            help="R-group may be a shorthand (H, OCH3, Br, tBu, NO2, C3H7, NHCOCH3, CF3, …) "
+                 "or a raw SMILES fragment (e.g. OC(C)(C)C).",
+        )
+        if mk_scaffold and mk_table and mk_table.strip():
+            _mres = struct2smi.enumerate_markush(mk_scaffold, mk_table)
+            st.dataframe(
+                pd.DataFrame([{"compound": r.name, "status": r.status,
+                               "SMILES": r.smiles or "", "note": r.note} for r in _mres]),
+                use_container_width=True, hide_index=True,
+            )
+            markush_records = struct2smi.ok_records(_mres)
+            if markush_records:
+                markush_bytes = struct2smi.records_to_smi_bytes(_mres)
+                st.success(f"✅ Enumerated {len(markush_records)} compound(s).")
+            else:
+                st.warning("Nothing enumerated — check the scaffold placeholder and R-group values.")
 
 else:  # input_type == "Upload PDF / Image"
     st.markdown("#### 1 · Upload the PDF page or image with your scaffold + R-group table")
@@ -1080,6 +1124,8 @@ elif input_type == "Paste SMILES" and paste_smi_records and len(paste_smi_record
     _grid_records = paste_smi_records
 elif input_type == "Convert to SMILES" and struct2smi_records:
     _grid_records = struct2smi_records
+elif input_type == "Markush → enumerate" and markush_records:
+    _grid_records = markush_records
 
 if _grid_records:
     _n_grid = len(_grid_records)
@@ -1111,6 +1157,8 @@ if run_btn:
     elif input_type == "Convert to SMILES" and not struct2smi_bytes:
         st.error("⚠️ Provide at least one resolvable name / InChI / SMILES "
                   "(or a supported image).")
+    elif input_type == "Markush → enumerate" and not markush_bytes:
+        st.error("⚠️ Enter a valid scaffold ([*:1] attachment point) and at least one R-group row.")
     elif not output_formats:
         st.error("⚠️ Please select at least one output format")
     else:
@@ -1154,6 +1202,12 @@ if run_btn:
                         eff_bytes  = struct2smi_bytes
                         eff_name   = "struct2smi.smi"
                         st.info(f"🔄 Running {len(struct2smi_records)} converted structure(s).")
+                    elif input_type == "Markush → enumerate":
+                        eff_type   = "SMI_FILE"
+                        eff_smiles = None
+                        eff_bytes  = markush_bytes
+                        eff_name   = "markush.smi"
+                        st.info(f"🔄 Running {len(markush_records)} enumerated compound(s).")
                     elif input_type == "Upload PDF / Image":
                         eff_type   = "SMI_FILE"
                         eff_smiles = None
