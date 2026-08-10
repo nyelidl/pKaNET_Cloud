@@ -9,3 +9,6 @@ pillow-heif
 
 # name/IUPAC -> structure via OPSIN (enables struct2smi name handler); needs a JRE (default-jre in packages.txt). Optional: struct2smi degrades gracefully without it.
 py2opsin
+
+decimer                 
+decimer-segmentation    
