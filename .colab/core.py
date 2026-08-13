@@ -1,4 +1,4 @@
-# core.py  —  pKaNET Cloud+  (v80 — calibrated heuristic + fast predict API)
+# core.py  —  pKaNET Cloud+  (v81 — calibrated heuristic + fast predict API)
 #
 # ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
@@ -18,6 +18,8 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, rdMolDescriptors, Descriptors
 from rdkit.Chem.EnumerateStereoisomers import EnumerateStereoisomers, StereoEnumerationOptions
 from rdkit.Chem.MolStandardize import rdMolStandardize
+
+__version__ = "81"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -59,27 +61,9 @@ except ImportError:
     _dimorphite_fn = None; _DIMORPHITE_OK = False
     print("⚠️  dimorphite-dl not available.")
 
-_PKASOLVER_OK = False; _PROPKA_OK = False; _UNIPKA_OK = False; _PKA_BACKEND = "none"
-
-try:
-    from pkasolver.query import QueryModel as _PkaSolverModel  # noqa
-    _PKASOLVER_OK = True; _PKA_BACKEND = "pkasolver"; print("✅  pkasolver available.")
-except ImportError:
-    pass
-
-if not _PKASOLVER_OK:
-    try:
-        import propka.run as _propka_run  # noqa
-        _PROPKA_OK = True; _PKA_BACKEND = "propka"; print("✅  propka available.")
-    except ImportError:
-        pass
-
-if not _PKASOLVER_OK and not _PROPKA_OK:
-    if subprocess.run(["which", "unipka"], capture_output=True).returncode == 0:
-        _UNIPKA_OK = True; _PKA_BACKEND = "unipka_cli"; print("✅  unipka CLI available.")
-
-if _PKA_BACKEND == "none":
-    print("ℹ️  No ML pKa backend — heuristic ionizable-site table will be used.")
+_PKASOLVER_OK = False; _PROPKA_OK = False; _UNIPKA_OK = False
+_PKA_BACKEND = "heuristic"
+print("ℹ️  ML pKa backends disabled — heuristic ionizable-site table will be used.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Open Babel helper
@@ -323,6 +307,61 @@ def pdf2smi_make_grid_image(mols, legends, mols_per_row=5, sub_size=(220, 200)):
         return None
     from rdkit.Chem import Draw
     return Draw.MolsToGridImage(mols, molsPerRow=mols_per_row, subImgSize=sub_size, legends=legends)
+
+
+def make_structure_grid_image(records, mols_per_row=5, sub_size=(240, 220),
+                              add_stereo=True, number=True, max_mols=60):
+    """Render a list of molecules as ONE combined 2D grid image (PIL).
+
+    records    : iterable of SMILES strings, or (smiles, name) tuples.
+    add_stereo : annotate CIP R/S descriptors on stereocentres (the R/S labels).
+    number     : prefix each legend with its running index ("1. name").
+    max_mols   : cap how many structures are drawn into the single image.
+    Returns a PIL.Image, or None if nothing valid was found.
+    """
+    from rdkit.Chem import Draw
+    try:
+        from rdkit.Chem import rdCIPLabeler
+        _cip = True
+    except Exception:
+        _cip = False
+
+    mols, legends = [], []
+    for i, rec in enumerate(records, start=1):
+        if isinstance(rec, (tuple, list)):
+            smi = rec[0]
+            name = rec[1] if len(rec) > 1 and rec[1] else f"mol_{i:03d}"
+        else:
+            smi, name = rec, f"mol_{i:03d}"
+        mol = Chem.MolFromSmiles(smi) if smi else None
+        if mol is None:
+            continue
+        AllChem.Compute2DCoords(mol)
+        if add_stereo:
+            try:
+                Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
+                if _cip:
+                    rdCIPLabeler.AssignCIPLabels(mol)   # proper CIP R/S labels
+            except Exception:
+                pass
+        legends.append(f"{i}. {name}" if number else str(name))
+        mols.append(mol)
+        if len(mols) >= max_mols:
+            break
+
+    if not mols:
+        return None
+
+    try:
+        opts = Draw.rdMolDraw2D.MolDrawOptions()
+        if add_stereo:
+            opts.addStereoAnnotation = True
+        return Draw.MolsToGridImage(mols, molsPerRow=mols_per_row,
+                                    subImgSize=sub_size, legends=legends,
+                                    drawOptions=opts)
+    except Exception:
+        return Draw.MolsToGridImage(mols, molsPerRow=mols_per_row,
+                                    subImgSize=sub_size, legends=legends)
 
 
 def pdf2smi_to_smi_bytes(result_df):
@@ -766,23 +805,11 @@ _IONIZABLE_SITE_DEF = [
     # suppresses amine pKa (dorzolamide exp 6.35, brinzolamide exp 5.9).
     # Must precede generic aliphatic_amine (pKa 9.5).
     ("amine_gamma_ring_sulfonyl",  "[NX3;H1,H2;!$(NC=O);!$([nH])][CX4;R][CX4;R][CX4;R][SX4;R](=O)(=O)", 6.5, "base"),
-    # Hydrazine: N-N bond drastically reduces basicity (pKa 2-5 vs 9.5 for plain amine)
-    # Only the TERMINAL (more H-rich) N is matched as the ionizable atom.
-    # The adjacent N is excluded from further claiming via seen_ion in Pass 2.
-    #
-    # Heterocyclic aryl hydrazines (N-NH₂ on pyridine/quinoline) have variable
-    # pKa 5-8; we do NOT add a specific rule for them — they fall through to
-    # aliphatic_amine_t or are handled by the N~[!#6;!H] exclusion naturally.
-    #
-    # Phenyl-only aryl hydrazine (carbocyclic ring, no ring N): pKa~5.2
-    ("hydrazine_aryl",             "[NX3;H2;!$(NC=O);$([NX3;H2][NX3]c1ccccc1)]", 5.0, "base"),
-    # Heterocyclic aryl hydrazine (N-NH₂ on pyridine/quinoline etc.): pKa~7-8
-    # More basic than phenylhydrazine due to ring N electron donation.
-    ("hydrazine_heteroaryl",       "[NX3;H2;!$(NC=O);$([NX3;H2][NX3]c)]", 8.0, "base"),
-    # Terminal hydrazine R-NH-NH₂ (pKa ~7-8 for alkyl); match only the -NH₂ end
-    ("hydrazine_terminal",         "[NX3;H2;!$(NC=O);$([NX3;H2][NX3;!$([NX3]c)])]", 7.0, "base"),
-    # Secondary hydrazine R-NH-NHR — dialkyl hydrazines pKa ~7-8
-    ("hydrazine_secondary",        "[NX3;H1;!$(NC=O);$([NX3;H1][NX3;H1;!$(NC=O)])]",  7.0, "base"),
+    # Hydrazine: N-N bond drastically reduces basicity (pKa 2-5 vs 9.5 for plain amine).
+    # Match the more protonated terminal nitrogen before generic aliphatic amines.
+    ("hydrazine_aryl",             "[NX3;H2;!$(NC=O);$([NX3;H2][NX3]c)]",                 5.0, "base"),
+    ("hydrazine_terminal",         "[NX3;H2;!$(NC=O);$([NX3;H2][NX3;!$([NX3]c)])]",       3.5, "base"),
+    ("hydrazine_secondary",        "[NX3;H1;!$(NC=O);$([NX3;H1][NX3;H1;!$(NC=O)])]",      4.0, "base"),
     ("aliphatic_amine",            "[NX3;H1,H2;!$(NC=O);!$(N~[!#6;!H]);!$([nH]);!$([NX3][CX3](=[NX2])[NX3])]",        9.5,  "base"),
     # Tertiary aliphatic amine: pKa ~8.5 (trimethylamine=9.8 but multi-subst. lowers; v80 recalibrated)
     ("aliphatic_amine_t",          "[NX3;H0;!$(NC=O);!$(Nc);!$([nH]);!$([N]~[!#6]);!$([NX3]([CX4][CX3]=O)[CX4][CX3]=O)]",    8.5,  "base"),
@@ -1711,6 +1738,14 @@ def _supplement_dimorphite(tautomer_smiles, dimorphite_results, ion_sites, targe
 def generate_ranked_microstates(base_smiles, target_ph=7.4, ph_window=1.0, max_tautomers=8, top_n=5, pubchem_result=None):
     if pubchem_result is None: pubchem_result = {}
     ref_mol = Chem.MolFromSmiles(base_smiles)
+    # Preserve explicitly charged input states through enumeration, except
+    # aromatic resonance cations whose written charge is not a reliable net
+    # physiological protonation assignment.
+    input_canon = canonicalize(base_smiles)
+    input_charge = Chem.GetFormalCharge(ref_mol) if ref_mol is not None else 0
+    input_has_aromatic_charge = bool(ref_mol and any(
+        a.GetIsAromatic() and a.GetFormalCharge() != 0 for a in ref_mol.GetAtoms()))
+    preserve_input_state = bool(ref_mol and input_canon and not input_has_aromatic_charge)
     kept, disc, tr_flag, tr_motifs = enumerate_and_filter_tautomers(base_smiles, max_states=max_tautomers)
     if disc:
         print(f"   🔬  Discarded {len(disc)} implausible tautomers (e.g. score={disc[0]['score']:.1f}: {disc[0]['smiles'][:55]})")
@@ -1766,6 +1801,10 @@ def generate_ranked_microstates(base_smiles, target_ph=7.4, ph_window=1.0, max_t
                 **{f"score_{k}": v for k, v in bd.items()},
                 **{f"taut_{k}":  v for k, v in taut["breakdown"].items()},
             })
+    if preserve_input_state:
+        for row in all_micro:
+            if row["microstate_smiles"] == input_canon:
+                row["selection_score"] += 5.0 if input_charge != 0 else 0.0
     if not all_micro: return [], False, [], tr_flag, tr_motifs, ml_preds
     all_micro.sort(key=lambda x: (-x["selection_score"], abs(x["net_charge"]), x["tautomer_rank"], x["microstate_smiles"]))
     best_sc = all_micro[0]["selection_score"]
@@ -2133,6 +2172,7 @@ def zip_all_outputs(out_dir, zip_path):
     return str(zp)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # v81 Hammett / Taft substituent pKa corrections
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2355,6 +2395,8 @@ def _hammett_corrected_phenol_pka(mol, oh_idx, base_pka=10.0):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # v81 PUBLIC FAST-PREDICT API
+
+# v81 PUBLIC FAST-PREDICT API
 # ─────────────────────────────────────────────────────────────────────────────
 
 def heuristic_net_charge(smiles: str, ph: float = 7.4) -> int | None:
@@ -2383,7 +2425,7 @@ def heuristic_net_charge(smiles: str, ph: float = 7.4) -> int | None:
     # would double-count the substituent effect.
     for site in sites:
         label = str(site.get("label", "")).lower()
-        # Taft correction for aliphatic amines and hydrazines
+        # Taft correction for aliphatic amines
         if label in ("aliphatic_amine", "aliphatic_amine_t"):
             n_idx = site["atom_indices"][0]
             base_pka = float(site.get("heuristic_pka", 9.5))
